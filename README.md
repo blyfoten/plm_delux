@@ -41,7 +41,7 @@ A modern PLM-style environment for software requirements, architecture definitio
 - YAML and Markdown for requirement storage
 
 ### Frontend
-- React with TypeScript
+- React 18 with TypeScript
 - Chakra UI for components
 - React Flow for interactive diagrams
 - React Hook Form for form management
@@ -50,28 +50,52 @@ A modern PLM-style environment for software requirements, architecture definitio
 ## Getting Started
 
 ### Prerequisites
+
 1. Python 3.12 or higher
 2. Node.js 18 or higher
-3. Graphviz installed on your system
+3. Graphviz (for diagram generation)
 4. OpenAI API key
+
+#### Installing Graphviz
+
+- **Windows**: 
+  1. Download from [Graphviz Download Page](https://graphviz.org/download/)
+  2. Add the bin directory to your PATH
+  3. Verify installation: `dot -V`
+
+- **macOS**:
+  ```bash
+  brew install graphviz
+  ```
+
+- **Linux**:
+  ```bash
+  sudo apt-get install graphviz  # Ubuntu/Debian
+  sudo dnf install graphviz      # Fedora
+  ```
 
 ### Installation
 
 1. Clone the repository:
-bash
+```bash
 git clone https://github.com/yourusername/plm_delux.git
 cd plm_delux
 ```
 
-2. Install Python dependencies:
+2. Create and activate a Python virtual environment:
 ```bash
-pip install -r requirements.txt
+# Windows
+python -m venv .venv
+.venv\Scripts\activate
+
+# Linux/macOS
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-3. Install frontend dependencies:
+3. Install Python dependencies:
 ```bash
-cd src/web/frontend
-npm install
+pip install -r requirements.txt
 ```
 
 4. Set up environment variables:
@@ -79,8 +103,14 @@ npm install
 # Windows
 set OPENAI_API_KEY=your_api_key_here
 
-# Linux/Mac
+# Linux/macOS
 export OPENAI_API_KEY=your_api_key_here
+```
+
+5. Install frontend dependencies:
+```bash
+cd src/web/frontend
+npm install --legacy-peer-deps
 ```
 
 ### Running the Application
@@ -90,14 +120,45 @@ export OPENAI_API_KEY=your_api_key_here
 cd src/web
 uvicorn backend.api:app --reload
 ```
+The backend will be available at http://localhost:8000
 
-2. Start the frontend development server:
+2. Start the frontend development server (in a new terminal):
 ```bash
 cd src/web/frontend
-npm start
+npm run dev
 ```
+The frontend will be available at http://localhost:5173
 
-3. Access the web interface at http://localhost:3000
+## Development Workflow
+
+### Adding New Requirements
+
+1. Using the Web Interface:
+   - Navigate to http://localhost:5173
+   - Click "Generate Requirement" in the left panel
+   - Fill in the domain and context
+   - Click "Generate"
+
+2. Using the CLI:
+   ```bash
+   python src/ai_cli.py generate-requirements -d ui -c "Add support for voice announcements"
+   ```
+
+### Editing the Architecture
+
+1. Open the web interface
+2. Use the visual editor in the right panel:
+   - Drag blocks to reposition them
+   - Connect blocks by dragging between connection points
+   - Edit block properties by clicking on them
+   - Changes are automatically saved
+
+### Generating Code
+
+1. Select a requirement from the list
+2. Click "Generate Code"
+3. Review and edit the generated code
+4. Save to implement the changes
 
 ## Project Structure
 
@@ -119,35 +180,47 @@ plm_delux/
 └── tests/               # Test suites
 ```
 
-## Usage Examples
+## Troubleshooting
 
-### 1. Creating a New Requirement
+### Common Issues
 
-Using the CLI:
-```bash
-python src/ai_cli.py generate-requirements -d ui -c "Add support for voice announcements"
-```
+1. **Graphviz Not Found**
+   ```
+   graphviz.backend.execute.ExecutableNotFound: failed to execute ['dot']
+   ```
+   Solution: Install Graphviz and ensure it's in your PATH
 
-Using the Web Interface:
-1. Navigate to http://localhost:3000
-2. Click "Generate Requirement" in the left panel
-3. Fill in the domain and context
-4. Click "Generate"
+2. **Frontend Dependencies Conflict**
+   ```
+   npm ERR! ERESOLVE unable to resolve dependency tree
+   ```
+   Solution: Use `npm install --legacy-peer-deps`
 
-### 2. Editing the Architecture
+3. **OpenAI API Key Not Found**
+   ```
+   ValueError: OpenAI API key must be provided
+   ```
+   Solution: Set the OPENAI_API_KEY environment variable
 
-1. Open the web interface
-2. Use the visual editor in the right panel
-3. Drag blocks to reposition them
-4. Connect blocks by dragging between connection points
-5. Changes are automatically saved
+4. **Backend Connection Failed**
+   ```
+   Failed to fetch: http://localhost:8000/api/...
+   ```
+   Solution: Ensure the backend server is running and CORS is properly configured
 
-### 3. Generating Code
+### Development Tips
 
-1. Select a requirement from the list
-2. Click "Generate Code"
-3. Review and edit the generated code
-4. Save to implement the changes
+1. **Hot Reload**
+   - Backend: The `--reload` flag with uvicorn enables auto-reload
+   - Frontend: Vite provides fast hot module replacement (HMR)
+
+2. **API Documentation**
+   - Swagger UI: http://localhost:8000/docs
+   - ReDoc: http://localhost:8000/redoc
+
+3. **Debugging**
+   - Backend: Use `logging.debug()` statements
+   - Frontend: Use React DevTools and Network tab
 
 ## Contributing
 
@@ -156,6 +229,13 @@ Using the Web Interface:
 3. Commit your changes
 4. Push to the branch
 5. Create a Pull Request
+
+### Development Guidelines
+
+1. Follow the existing code style
+2. Add tests for new features
+3. Update documentation
+4. Use meaningful commit messages
 
 ## License
 
@@ -167,4 +247,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Graphviz for diagram generation
 - React Flow for interactive diagrams
 - FastAPI for the backend framework
-- All other open-source contributors``` 
+- All other open-source contributors
+``` 
