@@ -19,6 +19,13 @@ class RequirementsParser:
 
     def parse_all(self) -> Dict[str, Requirement]:
         """Parse all requirement files in the requirements directory and its subdirectories."""
+        self.requirements = {}  # Clear existing requirements
+        
+        if not os.path.exists(self.requirements_dir):
+            os.makedirs(self.requirements_dir)
+            # Create demo requirements if directory is empty
+            self._create_demo_requirements()
+        
         for root, _, files in os.walk(self.requirements_dir):
             for file in files:
                 if file.endswith('.md'):
@@ -54,3 +61,58 @@ class RequirementsParser:
                 if block_id not in architecture_blocks:
                     errors.append(f"Requirement {req_id} references non-existent block {block_id}")
         return errors 
+
+    def _create_demo_requirements(self):
+        """Create demo requirements if none exist."""
+        demo_reqs = [
+            {
+                'id': 'RQ-UI-001',
+                'domain': 'ui',
+                'description': 'Elevator shall have UI with floor buttons and a real-time display.',
+                'linked_blocks': ['BLK-UI-DISPLAY', 'BLK-UI-BUTTONS'],
+                'content': '''# Requirement RQ-UI-001
+
+**Description:**  
+The elevator shall include physical buttons for selecting floors and an accompanying digital display that shows the current floor and direction of travel.
+
+**Additional Notes:**  
+- The display updates in real-time.
+- The number of buttons depends on the number of floors.
+- The display should show:
+  - Current floor number
+  - Direction of travel (up/down)
+  - Status messages (e.g., "Door Opening", "Door Closing")'''
+            },
+            {
+                'id': 'RQ-MD-001',
+                'domain': 'motor_and_doors',
+                'description': 'Elevator motor control system for vertical movement',
+                'linked_blocks': ['BLK-MOTOR'],
+                'content': '''# Requirement RQ-MD-001
+
+**Description:**  
+The elevator motor control system shall provide precise control of vertical movement between floors, including acceleration and deceleration profiles for passenger comfort.
+
+**Additional Notes:**  
+- Support variable speed control
+- Implement smooth acceleration and deceleration
+- Include emergency stop capability
+- Monitor motor temperature and current draw
+- Support both up and down movement
+- Implement position feedback for accurate floor leveling'''
+            }
+        ]
+        
+        for req in demo_reqs:
+            domain_dir = os.path.join(self.requirements_dir, req['domain'])
+            os.makedirs(domain_dir, exist_ok=True)
+            
+            filepath = os.path.join(domain_dir, f"{req['id'].lower()}.md")
+            with open(filepath, 'w') as f:
+                f.write('---\n')
+                f.write(f"id: {req['id']}\n")
+                f.write(f"domain: {req['domain']}\n")
+                f.write(f"linked_blocks: {req['linked_blocks']}\n")
+                f.write(f"description: \"{req['description']}\"\n")
+                f.write('---\n\n')
+                f.write(req['content'])

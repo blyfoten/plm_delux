@@ -1,0 +1,16 @@
+Generate requirements for an elevator control system's {domain} domain.
+Context: {context}
+
+Format each requirement as:
+- ID (e.g., RQ-{domain.upper()}-XXX)
+- Description
+- Linked architectural blocks
+- Additional implementation notes
+
+Focus on specific, testable requirements that can be implemented in code.
+Consider:
+1. Safety and reliability
+2. Performance requirements
+3. User experience
+4. Maintainability
+5. Integration with other subsystems 

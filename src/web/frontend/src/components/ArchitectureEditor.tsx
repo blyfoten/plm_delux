@@ -108,8 +108,23 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
     [architecture, onArchitectureUpdate]
   );
 
+  useEffect(() => {
+    // Fetch the latest architecture diagram
+    const fetchArchitecture = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/architecture');
+        const data = await response.json();
+        setArchitecture(data);
+      } catch (error) {
+        console.error('Error fetching architecture:', error);
+      }
+    };
+
+    fetchArchitecture();
+  }, []); // Empty dependency array means this runs once on component mount
+
   return (
-    <Box height="600px" border="1px" borderColor="gray.200" borderRadius="md">
+    <Box height="100%" border="1px" borderColor="gray.200" borderRadius="md">
       <ReactFlow
         nodes={nodes}
         edges={edges}

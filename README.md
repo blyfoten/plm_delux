@@ -184,25 +184,50 @@ plm_delux/
 
 ### Common Issues
 
-1. **Graphviz Not Found**
+1. **Module Import Errors**
+   ```
+   ModuleNotFoundError: No module named 'ai_integration'
+   ```
+   Solutions:
+   - The error occurs because Python can't find the modules in the src directory. Fix it by:
+     
+     a. Setting PYTHONPATH (recommended for development):
+     ```bash
+     # Windows
+     set PYTHONPATH=%PYTHONPATH%;C:\path\to\plm_delux\src
+
+     # Linux/macOS
+     export PYTHONPATH=$PYTHONPATH:/path/to/plm_delux/src
+     ```
+     
+     b. Installing the package in development mode:
+     ```bash
+     pip install -e .
+     ```
+     
+     c. The backend API already includes code to add src to Python path, but you might need this for other scripts.
+
+2. **Graphviz Not Found**
    ```
    graphviz.backend.execute.ExecutableNotFound: failed to execute ['dot']
    ```
    Solution: Install Graphviz and ensure it's in your PATH
+   - Windows: Restart your terminal after installing Graphviz
+   - Check installation: `dot -V`
 
-2. **Frontend Dependencies Conflict**
+3. **Frontend Dependencies Conflict**
    ```
    npm ERR! ERESOLVE unable to resolve dependency tree
    ```
    Solution: Use `npm install --legacy-peer-deps`
 
-3. **OpenAI API Key Not Found**
+4. **OpenAI API Key Not Found**
    ```
    ValueError: OpenAI API key must be provided
    ```
    Solution: Set the OPENAI_API_KEY environment variable
 
-4. **Backend Connection Failed**
+5. **Backend Connection Failed**
    ```
    Failed to fetch: http://localhost:8000/api/...
    ```

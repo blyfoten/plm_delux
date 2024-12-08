@@ -5,8 +5,15 @@ from typing import List, Optional, Dict
 import asyncio
 import os
 import frontmatter
+import sys
+from pathlib import Path
 
-from ai_integration import AIIntegrator, GeneratedRequirement, GeneratedCode
+# Add the src directory to the Python path
+src_path = str(Path(__file__).parent.parent.parent)
+if src_path not in sys.path:
+    sys.path.append(src_path)
+
+from ai_integration import OpenAIService, MockAIService, GeneratedRequirement, GeneratedCode
 from requirements_parser import RequirementsParser, Requirement
 from architecture import Block, system_architecture
 from visualizer import ArchitectureVisualizer
@@ -16,7 +23,7 @@ app = FastAPI(title="PLM Web Interface")
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # Vite dev server
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,7 +31,11 @@ app.add_middleware(
 
 # Initialize components
 parser = RequirementsParser("requirements")
-ai = AIIntegrator(os.getenv("OPENAI_API_KEY"))
+
+# Use MockAIService if no API key is available
+api_key = os.getenv("OPENAI_API_KEY")
+ai = OpenAIService(api_key) if api_key else MockAIService()
+
 visualizer = ArchitectureVisualizer(parser.parse_all())
 
 # Models for API requests/responses
@@ -103,13 +114,16 @@ async def update_requirement(requirement_id: str, requirement: RequirementUpdate
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/requirements/generate")
-async def generate_requirements(request: RequirementRequest, background_tasks: BackgroundTasks):
+async def generate_requirements(request: RequirementRequest):
     """Generate new requirements using AI."""
     try:
         requirements = await ai.generate_requirements(request.domain, request.context)
         
-        # Save requirements in background
-        background_tasks.add_task(save_requirements, requirements, request.domain)
+        # Save requirements immediately instead of in background
+        save_requirements(requirements, request.domain)
+        
+        # Refresh the parser's cache
+        parser.parse_all()
         
         return {"requirements": requirements}
     except Exception as e:
@@ -146,6 +160,9 @@ async def update_architecture(request: ArchitectureUpdateRequest):
         update_system_architecture(request.blocks)
         
         # Regenerate visualization
+        parser = RequirementsParser("requirements")
+        requirements = parser.parse_all()
+        visualizer = ArchitectureVisualizer(requirements)
         visualizer.generate_diagram(system_architecture, "docs/architecture")
         
         return {"message": "Architecture updated successfully"}

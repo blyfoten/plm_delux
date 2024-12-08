@@ -1,0 +1,20 @@
+Generate Python code to implement the following requirement:
+
+Requirement ID: {requirement.id}
+Description: {requirement.description}
+Additional Notes:
+{notes}
+
+Generate production-quality Python code with:
+- Proper type hints
+- Comprehensive docstrings
+- Error handling
+- Logging
+- Unit test placeholders
+
+Consider:
+1. Thread safety and concurrency
+2. Resource management
+3. Error recovery
+4. Performance optimization
+5. Integration points with other components 

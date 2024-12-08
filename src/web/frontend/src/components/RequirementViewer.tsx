@@ -17,7 +17,8 @@ import {
   useColorModeValue,
 } from '@chakra-ui/react';
 import ReactMarkdown from 'react-markdown';
-import ChakraUIRenderer from 'chakra-ui-markdown-renderer';
+import remarkGfm from 'remark-gfm';
+import MarkdownRenderer from './MarkdownRenderer';
 
 interface Requirement {
   id: string;
@@ -92,7 +93,10 @@ const RequirementViewer: React.FC<RequirementViewerProps> = ({
                 borderWidth="1px"
                 borderColor={borderColor}
               >
-                <ReactMarkdown components={ChakraUIRenderer()} skipHtml>
+                <ReactMarkdown
+                  components={MarkdownRenderer}
+                  remarkPlugins={[remarkGfm]}
+                >
                   {requirement.content}
                 </ReactMarkdown>
               </Box>
