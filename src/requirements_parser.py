@@ -84,6 +84,23 @@ The elevator shall include physical buttons for selecting floors and an accompan
   - Status messages (e.g., "Door Opening", "Door Closing")'''
             },
             {
+                'id': 'RQ-UI-002',
+                'domain': 'ui',
+                'description': 'Elevator shall have an alarm system with audio and visual indicators.',
+                'linked_blocks': ['BLK-UI-ALARM', 'BLK-ALARM-COMM'],
+                'content': '''# Requirement RQ-UI-002
+
+**Description:**  
+The elevator shall include an alarm system that provides both audio and visual indicators for emergency situations.
+
+**Additional Notes:**  
+- Audio alarm with configurable volume
+- Visual strobe light for hearing-impaired users
+- Emergency button with tactile feedback
+- Direct communication link to building security
+- Battery backup for alarm system'''
+            },
+            {
                 'id': 'RQ-MD-001',
                 'domain': 'motor_and_doors',
                 'description': 'Elevator motor control system for vertical movement',
@@ -100,6 +117,42 @@ The elevator motor control system shall provide precise control of vertical move
 - Monitor motor temperature and current draw
 - Support both up and down movement
 - Implement position feedback for accurate floor leveling'''
+            },
+            {
+                'id': 'RQ-MD-002',
+                'domain': 'motor_and_doors',
+                'description': 'Automatic door control system with safety features',
+                'linked_blocks': ['BLK-DOOR'],
+                'content': '''# Requirement RQ-MD-002
+
+**Description:**  
+The door control system shall provide smooth and safe operation of the elevator doors with obstacle detection.
+
+**Additional Notes:**  
+- Obstacle detection and auto-reverse
+- Adjustable door timing
+- Emergency manual operation
+- Door position monitoring
+- Energy-efficient operation
+- Sound indication during door movement'''
+            },
+            {
+                'id': 'RQ-SYS-001',
+                'domain': 'system',
+                'description': 'Over-the-air (OTA) update capability for all subsystems',
+                'linked_blocks': ['BLK-OTA'],
+                'content': '''# Requirement RQ-SYS-001
+
+**Description:**  
+The system shall support secure over-the-air updates for all software components with rollback capability.
+
+**Additional Notes:**  
+- Secure update mechanism
+- Version control and rollback
+- Update progress monitoring
+- Automatic integrity verification
+- Scheduled update windows
+- Minimal downtime during updates'''
             }
         ]
         

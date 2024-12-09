@@ -3,19 +3,19 @@ digraph {
 	rankdir=TB
 	node [shape=box style=rounded]
 	"BLK-SYSTEM" [label="Elevator Control System\n(BLK-SYSTEM)" fillcolor=lightblue style=filled]
-	"BLK-MOTOR" [label="Motor Control\n(BLK-MOTOR)\nRequirements:\nRQ-MD-001: Elevator motor control system for vertic...\n" fillcolor=lightpink style=filled]
-	"BLK-SYSTEM" -> "BLK-MOTOR"
-	"BLK-DOOR" [label="Door Control\n(BLK-DOOR)\nRequirements:\n" fillcolor=lightyellow style=filled]
-	"BLK-SYSTEM" -> "BLK-DOOR"
 	"BLK-UI-DISPLAY" [label="UI Display\n(BLK-UI-DISPLAY)\nRequirements:\nRQ-UI-001: Elevator shall have UI with floor button...\n" fillcolor=lightgreen style=filled]
 	"BLK-SYSTEM" -> "BLK-UI-DISPLAY"
 	"BLK-UI-BUTTONS" [label="UI Buttons\n(BLK-UI-BUTTONS)\nRequirements:\nRQ-UI-001: Elevator shall have UI with floor button...\n" fillcolor=lightgreen style=filled]
 	"BLK-SYSTEM" -> "BLK-UI-BUTTONS"
-	"BLK-UI-ALARM" [label="UI Alarm\n(BLK-UI-ALARM)\nRequirements:\n" fillcolor=lightgreen style=filled]
+	"BLK-UI-ALARM" [label="UI Alarm\n(BLK-UI-ALARM)" fillcolor=lightgreen style=filled]
 	"BLK-SYSTEM" -> "BLK-UI-ALARM"
-	"BLK-OTA" [label="OTA Updates\n(BLK-OTA)\nRequirements:\n" fillcolor=lightgray style=filled]
+	"BLK-MOTOR" [label="Motor Control\n(BLK-MOTOR)\nRequirements:\nRQ-MD-001: Elevator motor control system for vertic...\n" fillcolor=lightpink style=filled]
+	"BLK-SYSTEM" -> "BLK-MOTOR"
+	"BLK-DOOR" [label="Door Control\n(BLK-DOOR)" fillcolor=lightyellow style=filled]
+	"BLK-SYSTEM" -> "BLK-DOOR"
+	"BLK-OTA" [label="OTA Updates\n(BLK-OTA)" fillcolor=lightgray style=filled]
 	"BLK-SYSTEM" -> "BLK-OTA"
-	"BLK-ALARM-COMM" [label="Alarm Communication\n(BLK-ALARM-COMM)\nRequirements:\n" fillcolor=lightgray style=filled]
+	"BLK-ALARM-COMM" [label="Alarm Communication\n(BLK-ALARM-COMM)" fillcolor=lightgray style=filled]
 	"BLK-SYSTEM" -> "BLK-ALARM-COMM"
 	"BLK-UI-DISPLAY" -> "BLK-UI-BUTTONS" [label="RQ-UI-001" color=blue style=dashed]
 }

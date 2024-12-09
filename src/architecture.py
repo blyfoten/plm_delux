@@ -89,6 +89,7 @@ class Block:
 system_architecture = Block(
     block_id="BLK-SYSTEM",
     name="Elevator Control System",
+    requirements=["RQ-SYS-001"],
     subblocks=[
         Block(
             block_id="BLK-UI-DISPLAY",
@@ -102,7 +103,8 @@ system_architecture = Block(
         ),
         Block(
             block_id="BLK-UI-ALARM",
-            name="UI Alarm"
+            name="UI Alarm",
+            requirements=["RQ-UI-002"]
         ),
         Block(
             block_id="BLK-MOTOR",
@@ -111,15 +113,18 @@ system_architecture = Block(
         ),
         Block(
             block_id="BLK-DOOR",
-            name="Door Control"
+            name="Door Control",
+            requirements=["RQ-MD-002"]
         ),
         Block(
             block_id="BLK-OTA",
-            name="OTA Updates"
+            name="OTA Updates",
+            requirements=["RQ-SYS-001"]
         ),
         Block(
             block_id="BLK-ALARM-COMM",
-            name="Alarm Communication"
+            name="Alarm Communication",
+            requirements=["RQ-UI-002"]
         )
     ]
 )

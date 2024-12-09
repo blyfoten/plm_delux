@@ -7,6 +7,19 @@ import os
 import frontmatter
 import sys
 from pathlib import Path
+import logging
+from datetime import datetime
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('web_api.log')
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Add the src directory to the Python path
 src_path = str(Path(__file__).parent.parent.parent)
@@ -54,21 +67,36 @@ class CodeGenerationRequest(BaseModel):
     requirement_id: str
 
 class ArchitectureBlock(BaseModel):
+    """Architecture block data model."""
     block_id: str
     name: str
-    requirements: List[str]
-    subblocks: List[str]
-    x: float
-    y: float
+    requirements: List[str] = []
+    subblocks: List[str] = []
+    x: float = 0
+    y: float = 0
 
 class ArchitectureUpdateRequest(BaseModel):
+    """Request model for architecture updates."""
     blocks: Dict[str, ArchitectureBlock]
+
+@app.on_event("startup")
+async def startup_event():
+    """Log when the API server starts up."""
+    logger.info("=== API Server Starting Up ===")
+    logger.info(f"Using AI Service: {ai.__class__.__name__}")
+    logger.info(f"Requirements directory: {parser.requirements_dir}")
 
 @app.get("/api/requirements")
 async def get_requirements():
     """Get all requirements."""
-    requirements = parser.parse_all()
-    return {"requirements": requirements}
+    logger.info("Fetching all requirements")
+    try:
+        requirements = parser.parse_all()
+        logger.info(f"Found {len(requirements)} requirements")
+        return {"requirements": requirements}
+    except Exception as e:
+        logger.error(f"Error fetching requirements: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/requirements/{requirement_id}")
 async def get_requirement(requirement_id: str):
@@ -114,44 +142,94 @@ async def update_requirement(requirement_id: str, requirement: RequirementUpdate
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/requirements/generate")
-async def generate_requirements(request: RequirementRequest):
-    """Generate new requirements using AI."""
+async def generate_requirements(request: dict):
+    """Generate new requirements."""
+    domain = request.get("domain")
+    context = request.get("context")
+    logger.info(f"Generating requirements for domain: {domain}")
+    logger.info(f"Context: {context}")
+    
     try:
-        requirements = await ai.generate_requirements(request.domain, request.context)
+        requirements = await ai.generate_requirements(domain, context)
+        logger.info(f"Generated {len(requirements)} requirements")
         
-        # Save requirements immediately instead of in background
-        save_requirements(requirements, request.domain)
+        # Save requirements
+        domain_dir = Path("requirements") / domain
+        domain_dir.mkdir(parents=True, exist_ok=True)
         
-        # Refresh the parser's cache
-        parser.parse_all()
+        for req in requirements:
+            logger.info(f"Saving requirement: {req.id}")
+            filepath = domain_dir / f"{req.id.lower()}.md"
+            with open(filepath, "w") as f:
+                f.write("---\n")
+                f.write(f"id: {req.id}\n")
+                f.write(f"domain: {req.domain}\n")
+                f.write(f"linked_blocks: {req.linked_blocks}\n")
+                f.write(f'description: "{req.description}"\n')
+                f.write("---\n\n")
+                f.write(f"# Requirement {req.id}\n\n")
+                f.write("**Description:**  \n")
+                f.write(f"{req.description}\n\n")
+                f.write("**Additional Notes:**  \n")
+                for note in req.additional_notes:
+                    f.write(f"- {note}\n")
         
-        return {"requirements": requirements}
+        return {"message": "Requirements generated successfully", "requirements": requirements}
     except Exception as e:
+        logger.error(f"Error generating requirements: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/code/generate")
-async def generate_code(request: CodeGenerationRequest):
-    """Generate code for a requirement using AI."""
-    requirements = parser.parse_all()
-    if request.requirement_id not in requirements:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+async def generate_code(request: dict):
+    """Generate code for a requirement."""
+    requirement_id = request.get("requirement_id")
+    logger.info(f"Generating code for requirement: {requirement_id}")
     
     try:
-        requirement = requirements[request.requirement_id]
+        requirements = parser.parse_all()
+        if requirement_id not in requirements:
+            logger.error(f"Requirement not found: {requirement_id}")
+            raise HTTPException(status_code=404, detail=f"Requirement {requirement_id} not found")
+        
+        requirement = requirements[requirement_id]
+        logger.info(f"Found requirement: {requirement['description']}")
+        
         generated = await ai.generate_code(requirement)
+        logger.info(f"Generated code for block: {generated.block_id}")
+        
+        # Add tests
         generated = await ai.enhance_code_with_tests(generated)
+        logger.info("Added tests to generated code")
         
-        # Save generated code
-        save_generated_code(generated)
+        # Save the generated code
+        output_dir = Path("src/generated") / generated.block_id.lower()
+        output_dir.mkdir(parents=True, exist_ok=True)
         
-        return {"code": generated.code}
+        impl_file = output_dir / "implementation.py"
+        with open(impl_file, "w") as f:
+            f.write(generated.code)
+        logger.info(f"Saved generated code to: {impl_file}")
+        
+        if generated.tests:
+            test_file = output_dir / "test_implementation.py"
+            with open(test_file, "w") as f:
+                f.write(generated.tests)
+            logger.info(f"Saved tests to: {test_file}")
+        
+        return {"message": "Code generated successfully", "files": [str(impl_file)]}
     except Exception as e:
+        logger.error(f"Error generating code: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/architecture")
 async def get_architecture():
-    """Get the current architecture."""
-    return convert_architecture_to_dict(system_architecture)
+    """Get system architecture."""
+    logger.info("Fetching system architecture")
+    try:
+        return convert_architecture_to_dict(system_architecture)
+    except Exception as e:
+        logger.error(f"Error fetching architecture: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/architecture")
 async def update_architecture(request: ArchitectureUpdateRequest):
@@ -219,13 +297,25 @@ def save_generated_code(generated: GeneratedCode):
 
 def convert_architecture_to_dict(block: Block) -> dict:
     """Convert architecture block to dictionary for API response."""
+    blocks = {}
+    
+    def process_block(b: Block):
+        blocks[b.block_id] = {
+            "block_id": b.block_id,
+            "name": b.name,
+            "requirements": b.requirements,
+            "subblocks": [sb.block_id for sb in b.subblocks],
+            "x": getattr(b, 'x', 0),
+            "y": getattr(b, 'y', 0)
+        }
+        for subblock in b.subblocks:
+            process_block(subblock)
+    
+    process_block(block)
+    
     return {
-        "block_id": block.block_id,
-        "name": block.name,
-        "requirements": block.requirements,
-        "subblocks": [b.block_id for b in block.subblocks],
-        "x": getattr(block, 'x', 0),
-        "y": getattr(block, 'y', 0)
+        "root_id": block.block_id,
+        "blocks": blocks
     }
 
 def update_system_architecture(blocks: Dict[str, ArchitectureBlock]):
@@ -250,3 +340,14 @@ def update_system_architecture(blocks: Dict[str, ArchitectureBlock]):
     # Update the system architecture
     if system_architecture.block_id in blocks:
         update_block(system_architecture, blocks[system_architecture.block_id]) 
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    logger.info("Health check requested")
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "ai_service": ai.__class__.__name__,
+        "requirements_dir": str(parser.requirements_dir)
+    } 
