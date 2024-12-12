@@ -180,13 +180,21 @@ class OpenAIService(IAIService):
             # Get completion from OpenAI
             response = await self._get_completion(prompt, max_tokens=3000)
             
+            # Clean up the response to ensure it's just code
+            code = response
+            if "```python" in response:
+                # Extract code from markdown code blocks if present
+                code_blocks = response.split("```python")
+                if len(code_blocks) > 1:
+                    code = code_blocks[1].split("```")[0].strip()
+            
             # Extract the block ID from linked blocks
             block_id = requirement['linked_blocks'][0] if requirement['linked_blocks'] else "BLK-UNKNOWN"
             logger.debug(f"Using block ID: {block_id}")
             
             return GeneratedCode(
                 block_id=block_id,
-                code=response
+                code=code
             )
 
         except Exception as e:
@@ -199,21 +207,35 @@ class OpenAIService(IAIService):
         logger.info(f"Enhancing code with tests for block: {generated.block_id}")
         
         prompt = f"""
-Given the following Python code, generate comprehensive unit tests:
+Generate pytest-based unit tests for the following Python code. 
+IMPORTANT: Provide ONLY the test code without any markdown formatting, comments outside the code, or explanatory text.
+The output should be pure Python code that can be directly saved to a test file and executed.
+
+Code to test:
 
 {generated.code}
 
-Generate pytest-based unit tests that:
+Your test code should:
 1. Test all public methods and functions
 2. Include edge cases and error conditions
 3. Use appropriate fixtures and mocks
 4. Follow testing best practices
-5. Include docstrings and comments
+5. Include docstrings and comments within the code
+
+Begin your response with the imports and end with the test functions. Do not include any text before or after the code.
 """
 
         try:
             # Get completion from OpenAI
-            tests = await self._get_completion(prompt, max_tokens=2000)
+            response = await self._get_completion(prompt, max_tokens=2000)
+            
+            # Clean up the response to ensure it's just code
+            tests = response
+            if "```python" in response:
+                # Extract code from markdown code blocks if present
+                code_blocks = response.split("```python")
+                if len(code_blocks) > 1:
+                    tests = code_blocks[1].split("```")[0].strip()
             
             # Return enhanced code with tests
             return GeneratedCode(
@@ -224,6 +246,7 @@ Generate pytest-based unit tests that:
 
         except Exception as e:
             logger.error(f"Error enhancing code with tests: {str(e)}")
+            logger.exception("Detailed traceback:")
             raise
 
     async def suggest_architecture_improvements(self, current_architecture: str) -> str:

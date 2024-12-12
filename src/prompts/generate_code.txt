@@ -5,7 +5,10 @@ Description: {requirement[description]}
 Additional Notes:
 {notes}
 
-Generate production-quality Python code with:
+IMPORTANT: Provide ONLY the implementation code without any markdown formatting, comments outside the code, or explanatory text.
+The output should be pure Python code that can be directly saved to a file and executed.
+
+Your code should include:
 - Proper type hints
 - Comprehensive docstrings
 - Error handling
@@ -17,4 +20,6 @@ Consider:
 2. Resource management
 3. Error recovery
 4. Performance optimization
-5. Integration points with other components 
+5. Integration points with other components
+
+Begin your response with the imports and end with the main block. Do not include any text before or after the code.
