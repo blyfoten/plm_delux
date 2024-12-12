@@ -28,11 +28,20 @@ from ai_integration import OpenAIService, MockAIService, GeneratedRequirement, G
 from requirements_parser import RequirementsParser, Requirement
 from architecture import Block, system_architecture, save_architecture
 from visualizer import ArchitectureVisualizer
+from requirements_mapper import RequirementsMapper, CodeReference
 
 # Get workspace directory from environment or use default
 WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/work")
 
 # Pydantic models for API
+class CodeReferenceModel(BaseModel):
+    """Model for code references."""
+    file: str
+    line: int
+    function: str
+    type: str
+    url: str
+
 class RequirementBase(BaseModel):
     """Base model for requirements."""
     id: str
@@ -41,6 +50,7 @@ class RequirementBase(BaseModel):
     linked_blocks: List[str]
     additional_notes: List[str]
     content: str
+    code_references: List[CodeReferenceModel] = []
 
     class Config:
         """Pydantic config."""
@@ -68,10 +78,6 @@ class CodeGenerationResponse(BaseModel):
     message: str
     files: List[str]
 
-class RequirementsResponse(BaseModel):
-    """Response model for requirements endpoint."""
-    requirements: Dict[str, RequirementBase]
-
 class ArchitectureResponse(BaseModel):
     """Response model for architecture endpoint."""
     root_id: str
@@ -90,6 +96,7 @@ app.add_middleware(
 
 # Initialize components
 parser = RequirementsParser(WORKSPACE_DIR)
+mapper = RequirementsMapper(WORKSPACE_DIR)
 
 # Use MockAIService if no API key is available
 api_key = os.getenv("OPENAI_API_KEY")
@@ -120,26 +127,50 @@ def convert_architecture_to_dict(block: Block) -> dict:
         "blocks": blocks
     }
 
-@app.get("/api/requirements", response_model=RequirementsResponse)
+@app.get("/api/requirements")
 async def get_requirements():
-    """Get all requirements."""
+    """Get all requirements with their code references."""
     logger.info("Fetching requirements")
     try:
         requirements = parser.parse_all()
-        # Convert requirements to Pydantic models
-        requirements_dict = {
-            req_id: RequirementBase(
-                id=req.id,
-                domain=req.domain,
-                description=req.description,
-                linked_blocks=req.linked_blocks,
-                additional_notes=req.additional_notes,
-                content=req.content
-            ) for req_id, req in requirements.items()
-        }
-        return RequirementsResponse(requirements=requirements_dict)
+        logger.debug(f"Raw requirements: {requirements}")
+        
+        # Scan code for requirement references
+        mapper.scan_code_for_references()
+        
+        # Convert requirements to a dictionary format the frontend expects
+        response = {}
+        for req_id, req in requirements.items():
+            code_refs = mapper.get_references(req_id)
+            logger.info(f"Found {len(code_refs)} code references for {req_id}")
+            
+            code_ref_models = []
+            for ref in code_refs:
+                url = mapper.get_vscode_url(ref)
+                logger.info(f"Generated URL for {req_id}: {url}")
+                code_ref_models.append({
+                    "file": ref.file,
+                    "line": ref.line,
+                    "function": ref.function,
+                    "type": ref.type,
+                    "url": url
+                })
+            
+            response[req_id] = {
+                "id": req.id,
+                "domain": req.domain,
+                "description": req.description,
+                "linked_blocks": req.linked_blocks,
+                "additional_notes": req.additional_notes,
+                "content": req.content,
+                "code_references": code_ref_models
+            }
+        
+        logger.debug(f"Sending response: {response}")
+        return {"requirements": response}
     except Exception as e:
         logger.error(f"Error fetching requirements: {str(e)}")
+        logger.exception("Detailed traceback:")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/architecture", response_model=ArchitectureResponse)
@@ -238,11 +269,14 @@ async def generate_code(request: CodeGenerationRequest):
                 f.write(generated.tests)
             logger.info(f"Saved tests to: {test_file}")
         
+        # Update requirement mappings
+        mapper.scan_code_for_references()
+        
         return CodeGenerationResponse(
             message="Code generated successfully",
             files=[str(impl_file)]
         )
     except Exception as e:
         logger.error(f"Error generating code: {str(e)}")
-        logger.exception("Detailed traceback:")  # This will log the full traceback
+        logger.exception("Detailed traceback:")
         raise HTTPException(status_code=500, detail=str(e)) 

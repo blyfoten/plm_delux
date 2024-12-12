@@ -188,6 +188,12 @@ class OpenAIService(IAIService):
                 if len(code_blocks) > 1:
                     code = code_blocks[1].split("```")[0].strip()
             
+            # Add requirement tag to the code
+            code = f"""# Requirement: {requirement['id']}
+# Description: {requirement['description']}
+
+{code}"""
+            
             # Extract the block ID from linked blocks
             block_id = requirement['linked_blocks'][0] if requirement['linked_blocks'] else "BLK-UNKNOWN"
             logger.debug(f"Using block ID: {block_id}")

@@ -1,93 +1,139 @@
-Here is the Python code for the given requirement:
+# Requirement: RQ-MD-001
+# Description: Elevator motor control system for vertical movement
 
-```python
 import logging
-import threading
 import time
-from enum import Enum
-from typing import Optional
+import threading
+from typing import Any
 
 logging.basicConfig(level=logging.INFO)
 
-class Direction(Enum):
-    UP = 1
-    DOWN = -1
 
-class ElevatorMotorControlSystem:
+class MotorControl:
     """
-    Elevator motor control system for vertical movement
+    Class to control the motor of an elevator.
     """
-    def __init__(self):
+
+    def __init__(self) -> None:
         self.speed = 0
-        self.direction = None
-        self.is_emergency_stop = False
         self.temperature = 0
-        self.current_draw = 0
+        self.current = 0
+        self.direction = 0
         self.position = 0
-        self.lock = threading.Lock()
+        self.stop = False
+        self.lock = threading.RLock()
 
-    def set_speed(self, speed: int, direction: Direction):
+    def set_speed(self, speed: int) -> None:
         """
-        Set speed and direction of the motor
+        Set the speed of the motor.
         """
         with self.lock:
-            if self.is_emergency_stop:
-                logging.error("Cannot set speed during emergency stop")
-                return
             self.speed = speed
+
+    def get_speed(self) -> int:
+        """
+        Get the speed of the motor.
+        """
+        with self.lock:
+            return self.speed
+
+    def set_temperature(self, temperature: int) -> None:
+        """
+        Set the temperature of the motor.
+        """
+        with self.lock:
+            self.temperature = temperature
+
+    def get_temperature(self) -> int:
+        """
+        Get the temperature of the motor.
+        """
+        with self.lock:
+            return self.temperature
+
+    def set_current(self, current: int) -> None:
+        """
+        Set the current of the motor.
+        """
+        with self.lock:
+            self.current = current
+
+    def get_current(self) -> int:
+        """
+        Get the current of the motor.
+        """
+        with self.lock:
+            return self.current
+
+    def set_direction(self, direction: int) -> None:
+        """
+        Set the direction of the motor.
+        """
+        with self.lock:
             self.direction = direction
-            logging.info(f"Speed set to {self.speed} with direction {self.direction}")
 
-    def monitor_temperature_and_current_draw(self):
+    def get_direction(self) -> int:
         """
-        Monitor temperature and current draw of the motor
-        """
-        while True:
-            with self.lock:
-                if self.is_emergency_stop:
-                    break
-                # Check temperature and current draw from motor's sensors
-                # TODO: Integrate with actual sensor data
-                self.temperature = 0
-                self.current_draw = 0
-                logging.info(f"Temperature: {self.temperature}, Current draw: {self.current_draw}")
-                time.sleep(1)
-
-    def emergency_stop(self):
-        """
-        Stop the motor in case of emergency
+        Get the direction of the motor.
         """
         with self.lock:
-            self.is_emergency_stop = True
-            self.speed = 0
-            logging.info("Emergency stop activated")
+            return self.direction
 
-    def get_position_feedback(self) -> Optional[int]:
+    def set_position(self, position: int) -> None:
         """
-        Get the position feedback for accurate floor leveling
+        Set the position of the motor.
         """
         with self.lock:
-            if self.is_emergency_stop:
-                logging.error("Cannot get position during emergency stop")
-                return None
-            # Get position from motor's sensor
-            # TODO: Integrate with actual sensor data
-            self.position = 0
-            logging.info(f"Position: {self.position}")
+            self.position = position
+
+    def get_position(self) -> int:
+        """
+        Get the position of the motor.
+        """
+        with self.lock:
             return self.position
 
-def test_ElevatorMotorControlSystem():
-    # TODO: Implement test cases
-    pass
+    def emergency_stop(self) -> None:
+        """
+        Stop the motor in case of emergency.
+        """
+        with self.lock:
+            self.stop = True
+
+    def monitor(self) -> None:
+        """
+        Monitor the motor status.
+        """
+        while not self.stop:
+            logging.info(f"Motor status: Speed {self.get_speed()}, Temperature {self.get_temperature()}, Current {self.get_current()}, Direction {self.get_direction()}, Position {self.get_position()}")
+            time.sleep(1)
+
+    def control(self) -> None:
+        """
+        Control the motor using the given parameters.
+        """
+        try:
+            while not self.stop:
+                # Control logic here
+                time.sleep(1)
+        except Exception as e:
+            logging.error(f"Motor control error: {e}")
+        finally:
+            self.emergency_stop()
+
+
+def test_motor_control() -> None:
+    """
+    Unit test for the MotorControl class.
+    """
+    # Test code here
+
 
 if __name__ == "__main__":
-    test_ElevatorMotorControlSystem()
-```
-
-This code assumes that the temperature, current draw, and position are obtained from some type of sensor data which is not included in the code. The `monitor_temperature_and_current_draw` method and `get_position_feedback` method are placeholders to integrate with the actual sensor data.
-
-The `ElevatorMotorControlSystem` class uses a threading lock to ensure thread safety. The lock is used to prevent multiple threads from accessing or changing critical pieces of data at the same time.
-
-The `set_speed` method, `emergency_stop` method, and `get_position_feedback` method provide error recovery by checking for an emergency stop before proceeding.
-
-Please note, this is a simulation and should not be used for real-world applications without proper hardware integration and safety checks.
+    motor_control = MotorControl()
+    control_thread = threading.Thread(target=motor_control.control)
+    monitor_thread = threading.Thread(target=motor_control.monitor)
+    control_thread.start()
+    monitor_thread.start()
+    control_thread.join()
+    monitor_thread.join()
