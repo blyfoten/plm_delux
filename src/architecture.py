@@ -4,9 +4,13 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Set
 from pathlib import Path
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Block:
+    """Architecture block definition."""
     block_id: str
     name: str
     requirements: List[str] = field(default_factory=list)
@@ -85,56 +89,43 @@ class Block:
             reqs.update(subblock.get_all_requirements())
         return reqs
 
-# Define the system architecture
-system_architecture = Block(
-    block_id="BLK-SYSTEM",
-    name="Elevator Control System",
-    requirements=["RQ-SYS-001"],
-    subblocks=[
-        Block(
-            block_id="BLK-UI-DISPLAY",
-            name="UI Display",
-            requirements=["RQ-UI-001"]
-        ),
-        Block(
-            block_id="BLK-UI-BUTTONS",
-            name="UI Buttons",
-            requirements=["RQ-UI-001"]
-        ),
-        Block(
-            block_id="BLK-UI-ALARM",
-            name="UI Alarm",
-            requirements=["RQ-UI-002"]
-        ),
-        Block(
-            block_id="BLK-MOTOR",
-            name="Motor Control",
-            requirements=["RQ-MD-001"]
-        ),
-        Block(
-            block_id="BLK-DOOR",
-            name="Door Control",
-            requirements=["RQ-MD-002"]
-        ),
-        Block(
-            block_id="BLK-OTA",
-            name="OTA Updates",
-            requirements=["RQ-SYS-001"]
-        ),
-        Block(
-            block_id="BLK-ALARM-COMM",
-            name="Alarm Communication",
-            requirements=["RQ-UI-002"]
-        )
-    ]
-)
+def load_or_create_architecture(workspace_dir: str = "/work") -> Block:
+    """Load architecture from workspace or create a default one."""
+    arch_file = Path(workspace_dir) / "architecture" / "system.json"
+    
+    if arch_file.exists():
+        logger.info(f"Loading architecture from {arch_file}")
+        try:
+            with open(arch_file) as f:
+                return Block.from_dict(json.load(f))
+        except Exception as e:
+            logger.error(f"Error loading architecture: {str(e)}")
+    
+    logger.info("Creating default architecture")
+    return create_default_architecture()
 
-def save_architecture(arch: Block, path: Path):
-    """Save architecture to JSON file."""
-    with open(path, 'w') as f:
+def save_architecture(arch: Block, workspace_dir: str = "/work"):
+    """Save architecture to workspace."""
+    arch_file = Path(workspace_dir) / "architecture" / "system.json"
+    arch_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Saving architecture to {arch_file}")
+    with open(arch_file, 'w') as f:
         json.dump(arch.to_dict(), f, indent=2)
 
-def load_architecture(path: Path) -> Block:
-    """Load architecture from JSON file."""
-    with open(path) as f:
-        return Block.from_dict(json.load(f)) 
+def create_default_architecture() -> Block:
+    """Create a default system architecture."""
+    return Block(
+        block_id="BLK-SYSTEM",
+        name="System",
+        subblocks=[
+            Block(
+                block_id="BLK-DEMO",
+                name="Demo Block",
+                requirements=["RQ-DEMO-001"]
+            )
+        ]
+    )
+
+# Initialize system architecture
+system_architecture = load_or_create_architecture() 

@@ -1,4 +1,4 @@
-Generate requirements for an elevator control system's {domain} domain.
+Generate requirements for the {domain} domain.
 Context: {context}
 
 Format each requirement as:
@@ -9,8 +9,8 @@ Format each requirement as:
 
 Focus on specific, testable requirements that can be implemented in code.
 Consider:
-1. Safety and reliability
+1. Functional requirements
 2. Performance requirements
-3. User experience
+3. Security requirements
 4. Maintainability
-5. Integration with other subsystems 
+5. Integration with other components 

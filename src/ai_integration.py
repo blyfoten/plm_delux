@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import logging
 import openai
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -61,13 +62,13 @@ class OpenAIService(IAIService):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
-        openai.api_key = self.api_key
+        self.client = AsyncOpenAI(api_key=self.api_key)
         logger.info("OpenAIService initialized")
 
     async def _get_completion(self, prompt: str, max_tokens: int = 2000) -> str:
         """Get completion from OpenAI API."""
         try:
-            response = await openai.ChatCompletion.acreate(
+            response = await self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant specializing in software engineering, requirements analysis, and code generation."},
@@ -75,7 +76,6 @@ class OpenAIService(IAIService):
                 ],
                 max_tokens=max_tokens,
                 temperature=0.7,
-                top_p=1.0,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
@@ -143,26 +143,46 @@ class OpenAIService(IAIService):
 
     async def generate_code(self, requirement: dict) -> GeneratedCode:
         """Generate code implementation for a requirement."""
+        logger.debug(f"Received requirement dict: {requirement}")
+        
+        # Validate required fields
+        required_fields = ['id', 'description', 'linked_blocks', 'additional_notes']
+        logger.debug(f"Checking required fields: {required_fields}")
+        logger.debug(f"Available fields: {list(requirement.keys())}")
+        
+        for field in required_fields:
+            if field not in requirement:
+                error_msg = f"Missing required field: {field}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
         logger.info(f"Generating code for requirement: {requirement['id']}")
         
-        # Load the code generation prompt template
-        prompt_path = Path(__file__).parent / "prompts" / "generate_code.txt"
-        with open(prompt_path) as f:
-            prompt_template = f.read()
-
-        # Format the prompt
-        notes = "\n".join(f"- {note}" for note in requirement.get('additional_notes', []))
-        prompt = prompt_template.format(
-            requirement=requirement,
-            notes=notes
-        )
-
         try:
+            # Load the code generation prompt template
+            prompt_path = Path(__file__).parent / "prompts" / "generate_code.txt"
+            with open(prompt_path) as f:
+                prompt_template = f.read()
+
+            # Format the prompt
+            notes = "\n".join(f"- {note}" for note in requirement.get('additional_notes', []))
+            try:
+                prompt = prompt_template.format(
+                    requirement=requirement,
+                    notes=notes
+                )
+                logger.debug(f"Generated prompt: {prompt}")
+            except KeyError as e:
+                logger.error(f"Error formatting prompt. Missing key: {e}")
+                logger.debug(f"Requirement keys available: {list(requirement.keys())}")
+                raise
+
             # Get completion from OpenAI
             response = await self._get_completion(prompt, max_tokens=3000)
             
             # Extract the block ID from linked blocks
             block_id = requirement['linked_blocks'][0] if requirement['linked_blocks'] else "BLK-UNKNOWN"
+            logger.debug(f"Using block ID: {block_id}")
             
             return GeneratedCode(
                 block_id=block_id,
@@ -171,6 +191,7 @@ class OpenAIService(IAIService):
 
         except Exception as e:
             logger.error(f"Error generating code: {str(e)}")
+            logger.exception("Detailed traceback:")
             raise
 
     async def enhance_code_with_tests(self, generated: GeneratedCode) -> GeneratedCode:

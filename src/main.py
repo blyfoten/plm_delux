@@ -1,9 +1,12 @@
 import os
 import logging
-from architecture import system_architecture
+from pathlib import Path
+from architecture import system_architecture, save_architecture
 from requirements_parser import RequirementsParser
 from code_generator import CodeGenerator
 from visualizer import ArchitectureVisualizer
+
+WORKSPACE_DIR = "/work"
 
 def setup_logging():
     """Set up logging configuration."""
@@ -19,7 +22,7 @@ def main():
 
     # Initialize the requirements parser
     logger.info("Parsing requirements...")
-    parser = RequirementsParser("requirements")
+    parser = RequirementsParser(WORKSPACE_DIR)
     requirements = parser.parse_all()
     logger.info(f"Found {len(requirements)} requirements")
 
@@ -39,14 +42,14 @@ def main():
 
     # Generate code
     logger.info("Generating code stubs...")
-    generator = CodeGenerator("src/generated", requirements)
+    generator = CodeGenerator(str(Path(WORKSPACE_DIR) / "generated"), requirements)
     generator.generate_all(system_architecture)
     logger.info("Code generation complete!")
 
     # Generate architecture diagram
     logger.info("Generating architecture diagram...")
     visualizer = ArchitectureVisualizer(requirements)
-    visualizer.generate_diagram(system_architecture, "docs/architecture")
+    visualizer.generate_diagram(system_architecture, str(Path(WORKSPACE_DIR) / "architecture" / "diagram"))
     logger.info("Architecture visualization complete!")
 
 if __name__ == "__main__":

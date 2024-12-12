@@ -1,12 +1,15 @@
 import asyncio
 import click
 import os
+from pathlib import Path
 from typing import Optional
 from ai_integration import AIIntegrator
 from requirements_parser import RequirementsParser
 from code_generator import CodeGenerator
 from visualizer import ArchitectureVisualizer
 from architecture import system_architecture
+
+WORKSPACE_DIR = "/work"
 
 @click.group()
 def cli():
@@ -23,13 +26,13 @@ async def generate_requirements(domain: str, context: str, api_key: Optional[str
     requirements = await ai.generate_requirements(domain, context)
     
     # Create requirements directory if it doesn't exist
-    domain_dir = os.path.join('requirements', domain)
-    os.makedirs(domain_dir, exist_ok=True)
+    domain_dir = Path(WORKSPACE_DIR) / "requirements" / domain
+    domain_dir.mkdir(parents=True, exist_ok=True)
     
     # Save each requirement as a markdown file
     for req in requirements:
         filename = f"{req.id.lower()}.md"
-        filepath = os.path.join(domain_dir, filename)
+        filepath = domain_dir / filename
         
         with open(filepath, 'w') as f:
             f.write('---\n')
@@ -53,7 +56,7 @@ async def generate_requirements(domain: str, context: str, api_key: Optional[str
 async def generate_code(requirement_id: str, api_key: Optional[str]):
     """Generate code implementation for a requirement."""
     # Parse existing requirements
-    parser = RequirementsParser("requirements")
+    parser = RequirementsParser(WORKSPACE_DIR)
     requirements = parser.parse_all()
     
     if requirement_id not in requirements:
@@ -69,10 +72,10 @@ async def generate_code(requirement_id: str, api_key: Optional[str]):
     generated = await ai.enhance_code_with_tests(generated)
     
     # Save the generated code
-    output_dir = os.path.join('src', 'generated', generated.block_id.lower())
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = Path(WORKSPACE_DIR) / "generated" / generated.block_id.lower()
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    impl_file = os.path.join(output_dir, 'implementation.py')
+    impl_file = output_dir / 'implementation.py'
     with open(impl_file, 'w') as f:
         f.write(generated.code)
     
@@ -90,33 +93,14 @@ async def improve_architecture(api_key: Optional[str]):
     suggestions = await ai.suggest_architecture_improvements(current_arch)
     
     # Save suggestions to a file
-    with open('docs/architecture_suggestions.md', 'w') as f:
+    suggestions_file = Path(WORKSPACE_DIR) / "architecture" / "suggestions.md"
+    suggestions_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(suggestions_file, 'w') as f:
         f.write('# Architecture Improvement Suggestions\n\n')
         f.write(suggestions)
     
-    click.echo("Architecture suggestions saved to docs/architecture_suggestions.md")
+    click.echo(f"Architecture suggestions saved to {suggestions_file}")
 
-@cli.command()
-def visualize():
-    """Generate visual representation of the current architecture."""
-    # Parse requirements
-    parser = RequirementsParser("requirements")
-    requirements = parser.parse_all()
-    
-    # Generate visualization
-    visualizer = ArchitectureVisualizer(requirements)
-    visualizer.generate_diagram(system_architecture, "docs/architecture")
-    
-    click.echo("Architecture diagram generated in docs/architecture.png")
-
-def main():
-    """Entry point for the CLI application."""
-    # Create an event loop and run the async commands
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(cli())
-    finally:
-        loop.close()
-
-if __name__ == '__main__':
-    main() 
+if __name__ == "__main__":
+    asyncio.run(cli()) 

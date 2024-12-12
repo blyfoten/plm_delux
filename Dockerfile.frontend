@@ -1,0 +1,26 @@
+# Use Node.js as base image
+FROM node:18-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY src/web/frontend/package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy frontend source code
+COPY src/web/frontend/ .
+
+# Build the frontend
+RUN npm run build
+
+# Install serve to serve the static files
+RUN npm install -g serve
+
+# Expose port for frontend
+EXPOSE 5173
+
+# Start the frontend
+CMD ["serve", "-s", "dist", "-l", "5173"] 

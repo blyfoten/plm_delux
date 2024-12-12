@@ -1,7 +1,7 @@
 Generate Python code to implement the following requirement:
 
-Requirement ID: {requirement.id}
-Description: {requirement.description}
+Requirement ID: {requirement[id]}
+Description: {requirement[description]}
 Additional Notes:
 {notes}
 
