@@ -1,16 +1,22 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Button,
   FormControl,
   FormLabel,
-  Input,
   Textarea,
   VStack,
   useToast,
   Select,
 } from '@chakra-ui/react';
 import { useForm } from 'react-hook-form';
+
+interface DomainConfig {
+  name: string;
+  description: string;
+  parent_domain?: string;
+  subdomain_ids: string[];
+}
 
 interface RequirementGeneratorProps {
   onRequirementsGenerated: () => void;
@@ -26,6 +32,15 @@ const RequirementGenerator: React.FC<RequirementGeneratorProps> = ({
 }) => {
   const { register, handleSubmit, formState: { isSubmitting }, reset } = useForm<FormData>();
   const toast = useToast();
+  const [domains, setDomains] = useState<Record<string, DomainConfig>>({});
+
+  useEffect(() => {
+    // Load domains from settings
+    fetch('http://localhost:8000/api/settings')
+      .then((response) => response.json())
+      .then((data) => setDomains(data.domains))
+      .catch((error) => console.error('Error loading domains:', error));
+  }, []);
 
   const onSubmit = async (data: FormData) => {
     try {
@@ -67,6 +82,39 @@ const RequirementGenerator: React.FC<RequirementGeneratorProps> = ({
     }
   };
 
+  // Function to get domain display name
+  const getDomainDisplayName = (domainId: string) => {
+    const domain = domains[domainId];
+    return domain ? `${domain.name} (${domainId})` : domainId;
+  };
+
+  // Function to get domain hierarchy
+  const getDomainHierarchy = (domainId: string, level: number = 0): JSX.Element[] => {
+    const domain = domains[domainId];
+    if (!domain) return [];
+
+    const elements: JSX.Element[] = [
+      <option key={domainId} value={domainId}>
+        {"  ".repeat(level)}
+        {getDomainDisplayName(domainId)}
+      </option>
+    ];
+
+    // Add subdomains recursively
+    if (domain.subdomain_ids) {
+      domain.subdomain_ids.forEach(subId => {
+        elements.push(...getDomainHierarchy(subId, level + 1));
+      });
+    }
+
+    return elements;
+  };
+
+  // Get root domains (domains without parents)
+  const getRootDomains = () => {
+    return Object.keys(domains).filter(id => !domains[id].parent_domain);
+  };
+
   return (
     <Box p={4} borderWidth="1px" borderRadius="lg">
       <form onSubmit={handleSubmit(onSubmit)}>
@@ -74,9 +122,7 @@ const RequirementGenerator: React.FC<RequirementGeneratorProps> = ({
           <FormControl>
             <FormLabel>Domain</FormLabel>
             <Select {...register('domain')} placeholder="Select domain">
-              <option value="ui">User Interface</option>
-              <option value="motor_and_doors">Motor and Doors</option>
-              <option value="offboard">Offboard Systems</option>
+              {getRootDomains().map(domainId => getDomainHierarchy(domainId))}
             </Select>
           </FormControl>
 

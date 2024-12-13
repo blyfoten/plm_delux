@@ -5,6 +5,7 @@ from architecture import system_architecture, save_architecture
 from requirements_parser import RequirementsParser
 from code_generator import CodeGenerator
 from visualizer import ArchitectureVisualizer
+from web.backend.api import load_settings
 
 WORKSPACE_DIR = "/work"
 
@@ -19,6 +20,9 @@ def main():
     # Set up logging
     setup_logging()
     logger = logging.getLogger(__name__)
+
+    # Load settings
+    settings = load_settings()
 
     # Initialize the requirements parser
     logger.info("Parsing requirements...")
@@ -42,14 +46,14 @@ def main():
 
     # Generate code
     logger.info("Generating code stubs...")
-    generator = CodeGenerator(str(Path(WORKSPACE_DIR) / "generated"), requirements)
+    generator = CodeGenerator(settings.model_dump(), requirements)
     generator.generate_all(system_architecture)
     logger.info("Code generation complete!")
 
     # Generate architecture diagram
     logger.info("Generating architecture diagram...")
     visualizer = ArchitectureVisualizer(requirements)
-    visualizer.generate_diagram(system_architecture, str(Path(WORKSPACE_DIR) / "architecture" / "diagram"))
+    visualizer.generate_diagram(system_architecture, str(Path(WORKSPACE_DIR) / settings.architecture_folder / "diagram"))
     logger.info("Architecture visualization complete!")
 
 if __name__ == "__main__":

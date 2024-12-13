@@ -84,22 +84,65 @@ class ArchitectureResponse(BaseModel):
     root_id: str
     blocks: Dict[str, ArchitectureBlock]
 
+class DomainConfig(BaseModel):
+    """Configuration for a domain."""
+    name: str
+    description: str = ""
+    parent_domain: Optional[str] = None
+    subdomain_ids: List[str] = []
+
 class PLMSettings(BaseModel):
     """Settings model for PLM."""
-    source_folder: str = "src"
+    source_folder: str = "src"  # Used for both input (code analysis) and output (generated code)
     requirements_folder: str = "requirements"
     architecture_folder: str = "architecture"
-    generated_folder: str = "generated"
     folder_structure: str = "hierarchical"  # or "flat"
     preferred_languages: List[str] = ["python", "javascript"]
     custom_llm_instructions: str = ""
     source_include_patterns: List[str] = ["**/*.py", "**/*.js", "**/*.ts"]
     source_exclude_patterns: List[str] = ["**/node_modules/**", "**/__pycache__/**", "**/venv/**"]
+    domains: Dict[str, DomainConfig] = {
+        "ui": DomainConfig(
+            name="User Interface",
+            description="User interface components and interactions",
+            subdomain_ids=[]
+        ),
+        "motor_and_doors": DomainConfig(
+            name="Motor and Doors",
+            description="Motor control and door management systems",
+            subdomain_ids=[]
+        ),
+        "offboard": DomainConfig(
+            name="Offboard Systems",
+            description="External and cloud-based systems",
+            subdomain_ids=[]
+        )
+    }
+
+    class Config:
+        """Pydantic config."""
+        from_attributes = True
+        populate_by_name = True
 
     @classmethod
     def get_default_settings(cls) -> "PLMSettings":
         """Get default settings with comments."""
         return cls()
+
+    def model_dump(self, *args, **kwargs):
+        """Override model_dump to ensure proper domain serialization."""
+        data = super().model_dump(*args, **kwargs)
+        # Ensure domains are properly serialized
+        data['domains'] = {
+            domain_id: {
+                'name': domain.name,
+                'description': domain.description,
+                'parent_domain': domain.parent_domain,
+                'subdomain_ids': domain.subdomain_ids
+            }
+            for domain_id, domain in self.domains.items()
+        }
+        return data
 
 def load_settings() -> PLMSettings:
     """Load settings from file or create default."""
@@ -119,10 +162,9 @@ def save_settings(settings: PLMSettings):
     # Add comments to the YAML output
     yaml_str = """# PLM Settings Configuration
 # Folder paths relative to workspace
-source_folder: {source_folder}
+source_folder: {source_folder}  # Used for both input (code analysis) and output (generated code)
 requirements_folder: {requirements_folder}
 architecture_folder: {architecture_folder}
-generated_folder: {generated_folder}
 
 # Folder structure preference (hierarchical or flat)
 folder_structure: {folder_structure}
@@ -141,16 +183,25 @@ source_include_patterns:
 # Patterns to exclude from source scanning
 source_exclude_patterns:
 {excludes}
+
+# Domain configurations
+domains:
+{domains}
 """.format(
         source_folder=settings_dict["source_folder"],
         requirements_folder=settings_dict["requirements_folder"],
         architecture_folder=settings_dict["architecture_folder"],
-        generated_folder=settings_dict["generated_folder"],
         folder_structure=settings_dict["folder_structure"],
         languages="\n".join(f"  - {lang}" for lang in settings_dict["preferred_languages"]),
         custom_llm_instructions=settings_dict["custom_llm_instructions"],
         includes="\n".join(f"  - {pattern}" for pattern in settings_dict["source_include_patterns"]),
-        excludes="\n".join(f"  - {pattern}" for pattern in settings_dict["source_exclude_patterns"])
+        excludes="\n".join(f"  - {pattern}" for pattern in settings_dict["source_exclude_patterns"]),
+        domains="\n".join(
+            f"  {domain_id}:\n    name: {domain_data['name']}\n    description: {domain_data['description']}\n" + 
+            (f"    parent_domain: {domain_data['parent_domain']}\n" if domain_data['parent_domain'] else "") +
+            (f"    subdomain_ids:\n" + "\n".join(f"      - {sid}" for sid in domain_data['subdomain_ids']) if domain_data['subdomain_ids'] else "")
+            for domain_id, domain_data in settings_dict["domains"].items()
+        )
     )
     
     with open(settings_path, "w") as f:
@@ -321,6 +372,9 @@ async def generate_code(request: CodeGenerationRequest):
         requirement_dict = requirement_model.model_dump()
         logger.debug(f"Converted to dict for AI service: {requirement_dict}")
         
+        # Load current settings
+        current_settings = load_settings()
+        
         # Log the exact structure being passed to generate_code
         logger.info(f"Calling ai.generate_code with dict: {requirement_dict}")
         generated = await ai.generate_code(requirement_dict)
@@ -330,8 +384,8 @@ async def generate_code(request: CodeGenerationRequest):
         generated = await ai.enhance_code_with_tests(generated)
         logger.info("Added tests to generated code")
         
-        # Save the generated code
-        output_dir = Path(WORKSPACE_DIR) / "generated" / generated.block_id.lower()
+        # Save the generated code to the source folder
+        output_dir = Path(WORKSPACE_DIR) / current_settings.source_folder / generated.block_id.lower()
         output_dir.mkdir(parents=True, exist_ok=True)
         
         impl_file = output_dir / "implementation.py"
@@ -372,8 +426,11 @@ async def update_settings(new_settings: PLMSettings):
     """Update PLM settings."""
     logger.info("Updating settings")
     try:
+        logger.debug(f"Received settings data: {new_settings.model_dump()}")
+        logger.debug(f"Domains data: {new_settings.domains}")
         save_settings(new_settings)
         return {"message": "Settings updated successfully"}
     except Exception as e:
         logger.error(f"Error updating settings: {str(e)}")
+        logger.error(f"Settings data that caused error: {vars(new_settings)}")
         raise HTTPException(status_code=500, detail=str(e)) 

@@ -22,40 +22,58 @@ import {
   FormControl,
   FormLabel,
 } from '@chakra-ui/react';
-import { AddIcon } from '@chakra-ui/icons';
+import { AddIcon, CloseIcon } from '@chakra-ui/icons';
+
+interface DomainConfig {
+  name: string;
+  description: string;
+  parent_domain?: string;
+  subdomain_ids: string[];
+}
 
 interface PLMSettings {
   source_folder: string;
   requirements_folder: string;
   architecture_folder: string;
-  generated_folder: string;
   folder_structure: 'hierarchical' | 'flat';
   preferred_languages: string[];
   custom_llm_instructions: string;
   source_include_patterns: string[];
   source_exclude_patterns: string[];
+  domains: Record<string, DomainConfig>;
 }
 
 interface SettingsDialogProps {
   isOpen: boolean;
-  onClose: () => void;
+  onClose: (() => void) | undefined;
+  onSave: () => void;
+  forceConfiguration?: boolean;
 }
 
-export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose }) => {
+export const SettingsDialog: React.FC<SettingsDialogProps> = ({ 
+  isOpen, 
+  onClose, 
+  onSave,
+  forceConfiguration = false 
+}) => {
   const [settings, setSettings] = useState<PLMSettings>({
     source_folder: '',
     requirements_folder: '',
     architecture_folder: '',
-    generated_folder: '',
     folder_structure: 'hierarchical',
     preferred_languages: [],
     custom_llm_instructions: '',
     source_include_patterns: [],
     source_exclude_patterns: [],
+    domains: {},
   });
   const [newLanguage, setNewLanguage] = useState('');
   const [newIncludePattern, setNewIncludePattern] = useState('');
   const [newExcludePattern, setNewExcludePattern] = useState('');
+  const [newDomainId, setNewDomainId] = useState('');
+  const [newDomainName, setNewDomainName] = useState('');
+  const [newDomainDescription, setNewDomainDescription] = useState('');
+  const [newDomainParent, setNewDomainParent] = useState('');
 
   useEffect(() => {
     if (isOpen) {
@@ -75,7 +93,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
         },
         body: JSON.stringify(settings),
       });
-      onClose();
+      onSave();
     } catch (error) {
       console.error('Error saving settings:', error);
     }
@@ -111,13 +129,91 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
     }
   };
 
+  const handleAddDomain = () => {
+    if (newDomainId && !settings.domains[newDomainId]) {
+      setSettings({
+        ...settings,
+        domains: {
+          ...settings.domains,
+          [newDomainId]: {
+            name: newDomainName || newDomainId,
+            description: newDomainDescription,
+            parent_domain: newDomainParent || undefined,
+            subdomain_ids: [],
+          },
+        },
+      });
+      if (newDomainParent && settings.domains[newDomainParent]) {
+        setSettings((prev) => ({
+          ...prev,
+          domains: {
+            ...prev.domains,
+            [newDomainParent]: {
+              ...prev.domains[newDomainParent],
+              subdomain_ids: [...prev.domains[newDomainParent].subdomain_ids, newDomainId],
+            },
+          },
+        }));
+      }
+      setNewDomainId('');
+      setNewDomainName('');
+      setNewDomainDescription('');
+      setNewDomainParent('');
+    }
+  };
+
+  const handleRemoveDomain = (domainId: string) => {
+    const { [domainId]: removedDomain, ...remainingDomains } = settings.domains;
+    
+    if (removedDomain.parent_domain) {
+      const parentDomain = settings.domains[removedDomain.parent_domain];
+      if (parentDomain) {
+        remainingDomains[removedDomain.parent_domain] = {
+          ...parentDomain,
+          subdomain_ids: parentDomain.subdomain_ids.filter(id => id !== domainId),
+        };
+      }
+    }
+    
+    Object.keys(remainingDomains).forEach(id => {
+      if (remainingDomains[id].parent_domain === domainId) {
+        remainingDomains[id] = {
+          ...remainingDomains[id],
+          parent_domain: undefined,
+        };
+      }
+    });
+
+    setSettings({
+      ...settings,
+      domains: remainingDomains,
+    });
+  };
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="xl">
+    <Modal 
+      isOpen={isOpen} 
+      onClose={onClose || (() => {})} 
+      size="xl"
+      closeOnOverlayClick={!forceConfiguration}
+      closeOnEsc={!forceConfiguration}
+    >
       <ModalOverlay />
       <ModalContent>
-        <ModalHeader>PLM Settings</ModalHeader>
-        <ModalCloseButton />
+        <ModalHeader>
+          {forceConfiguration ? 'Initial Configuration Required' : 'PLM Settings'}
+        </ModalHeader>
+        {!forceConfiguration && <ModalCloseButton />}
         <ModalBody>
+          {forceConfiguration && (
+            <Box mb={6} p={4} bg="blue.50" borderRadius="md">
+              <Text>
+                Please configure your initial settings before continuing. 
+                These settings are required for the application to function properly.
+              </Text>
+            </Box>
+          )}
+          
           <VStack spacing={6} align="stretch">
             <Box>
               <Text fontWeight="bold" mb={2}>Folder Paths</Text>
@@ -129,6 +225,9 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
                       setSettings({ ...settings, source_folder: e.target.value })}
                   />
+                  <Text fontSize="sm" color="gray.600" mt={1}>
+                    Used for both input (code analysis) and output (generated code)
+                  </Text>
                 </FormControl>
                 <FormControl>
                   <FormLabel>Requirements Folder</FormLabel>
@@ -144,14 +243,6 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                     value={settings.architecture_folder}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
                       setSettings({ ...settings, architecture_folder: e.target.value })}
-                  />
-                </FormControl>
-                <FormControl>
-                  <FormLabel>Generated Folder</FormLabel>
-                  <Input
-                    value={settings.generated_folder}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => 
-                      setSettings({ ...settings, generated_folder: e.target.value })}
                   />
                 </FormControl>
               </VStack>
@@ -265,14 +356,98 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                 />
               </HStack>
             </Box>
+
+            <Box>
+              <Text fontWeight="bold" mb={2}>Domains</Text>
+              <VStack spacing={4} align="stretch">
+                {Object.entries(settings.domains).map(([domainId, domain]) => (
+                  <Box key={domainId} p={3} borderWidth="1px" borderRadius="md">
+                    <HStack justify="space-between" mb={2}>
+                      <VStack align="start" spacing={1}>
+                        <Text fontWeight="semibold">{domain.name} ({domainId})</Text>
+                        <Text fontSize="sm" color="gray.600">{domain.description}</Text>
+                        {domain.parent_domain && (
+                          <Text fontSize="sm">Parent: {domain.parent_domain}</Text>
+                        )}
+                        {domain.subdomain_ids.length > 0 && (
+                          <Text fontSize="sm">
+                            Subdomains: {domain.subdomain_ids.join(', ')}
+                          </Text>
+                        )}
+                      </VStack>
+                      <IconButton
+                        aria-label="Remove domain"
+                        icon={<CloseIcon />}
+                        size="sm"
+                        onClick={() => handleRemoveDomain(domainId)}
+                      />
+                    </HStack>
+                  </Box>
+                ))}
+
+                <Box p={3} borderWidth="1px" borderRadius="md">
+                  <Text fontWeight="semibold" mb={2}>Add New Domain</Text>
+                  <VStack spacing={3}>
+                    <FormControl>
+                      <FormLabel>Domain ID</FormLabel>
+                      <Input
+                        placeholder="e.g., ui, backend"
+                        value={newDomainId}
+                        onChange={(e) => setNewDomainId(e.target.value)}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Name</FormLabel>
+                      <Input
+                        placeholder="e.g., User Interface"
+                        value={newDomainName}
+                        onChange={(e) => setNewDomainName(e.target.value)}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Description</FormLabel>
+                      <Input
+                        placeholder="Domain description..."
+                        value={newDomainDescription}
+                        onChange={(e) => setNewDomainDescription(e.target.value)}
+                      />
+                    </FormControl>
+                    <FormControl>
+                      <FormLabel>Parent Domain (optional)</FormLabel>
+                      <Select
+                        value={newDomainParent}
+                        onChange={(e) => setNewDomainParent(e.target.value)}
+                        placeholder="Select parent domain"
+                      >
+                        {Object.keys(settings.domains).map((domainId) => (
+                          <option key={domainId} value={domainId}>
+                            {settings.domains[domainId].name}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormControl>
+                    <Button
+                      leftIcon={<AddIcon />}
+                      onClick={handleAddDomain}
+                      colorScheme="blue"
+                      width="full"
+                    >
+                      Add Domain
+                    </Button>
+                  </VStack>
+                </Box>
+              </VStack>
+            </Box>
           </VStack>
         </ModalBody>
         <ModalFooter>
-          <Button variant="ghost" mr={3} onClick={onClose}>
-            Cancel
-          </Button>
+          {!forceConfiguration && (
+            <Button variant="ghost" mr={3} onClick={onClose}>
+              Cancel
+            </Button>
+          )}
           <Button colorScheme="blue" onClick={handleSave}>
-            Save
+            {forceConfiguration ? 'Save and Continue' : 'Save'}
           </Button>
         </ModalFooter>
       </ModalContent>

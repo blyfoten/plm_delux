@@ -1,12 +1,19 @@
+"""Code generation utilities."""
+
 import os
-from typing import Dict, List
-from architecture import Block
-from requirements_parser import Requirement
+from typing import Dict
+from dataclasses import dataclass
+from enum import Enum, auto
+from pathlib import Path
+from .requirements_parser import Requirement
+from .architecture import Block
 
 class CodeGenerator:
-    def __init__(self, output_dir: str, requirements: Dict[str, Requirement]):
-        self.output_dir = output_dir
+    def __init__(self, settings: dict, requirements: Dict[str, Requirement]):
+        """Initialize code generator with settings and requirements."""
+        self.settings = settings
         self.requirements = requirements
+        self.output_dir = str(Path(os.getenv("WORKSPACE_DIR", "/work")) / settings["source_folder"])
 
     def generate_block_code(self, block: Block) -> None:
         """Generate code stubs for a given architecture block."""

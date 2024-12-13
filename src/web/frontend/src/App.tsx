@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ReactFlowProvider } from 'reactflow';
-import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem, IconButton } from '@chakra-ui/react';
+import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem, IconButton, useDisclosure } from '@chakra-ui/react';
 import { SettingsIcon } from '@chakra-ui/icons';
 import ArchitectureEditor from './components/ArchitectureEditor';
 import RequirementsList from './components/RequirementsList';
@@ -15,14 +15,36 @@ function App() {
   const [architecture, setArchitecture] = useState(null);
   const [selectedRequirement, setSelectedRequirement] = useState(null);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const toast = useToast();
+  const { isOpen: isSettingsOpen, onOpen: openSettings, onClose: closeSettings } = useDisclosure();
+  const [isSettingsConfigured, setIsSettingsConfigured] = useState(false);
 
   useEffect(() => {
     // Load initial data
     fetchRequirements();
     fetchArchitecture();
+    // Check if settings exist when app loads
+    checkSettings();
   }, []);
+
+  const checkSettings = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/settings');
+      const data = await response.json();
+      
+      // Consider settings as configured if they've been customized from defaults
+      // or if the settings file exists (any response means file exists)
+      setIsSettingsConfigured(true);
+      
+      // If settings don't exist, open settings dialog
+      if (!response.ok || response.status === 404) {
+        openSettings();
+      }
+    } catch (error) {
+      console.error('Error checking settings:', error);
+      setIsSettingsConfigured(false);
+      openSettings();
+    }
+  };
 
   const fetchRequirements = async () => {
     try {
@@ -91,6 +113,11 @@ function App() {
     }
   };
 
+  const handleSettingsSave = () => {
+    setIsSettingsConfigured(true);
+    closeSettings();
+  };
+
   return (
     <Box minH="100vh" bg="gray.50" p={4}>
       <HStack justify="space-between" mb={6}>
@@ -98,7 +125,7 @@ function App() {
         <IconButton
           aria-label="Settings"
           icon={<SettingsIcon />}
-          onClick={() => setIsSettingsOpen(true)}
+          onClick={openSettings}
           variant="ghost"
         />
       </HStack>
@@ -151,7 +178,9 @@ function App() {
 
       <SettingsDialog
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={isSettingsConfigured ? closeSettings : undefined}
+        onSave={handleSettingsSave}
+        forceConfiguration={!isSettingsConfigured}
       />
     </Box>
   );
