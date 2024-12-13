@@ -1,57 +1,114 @@
+"""Requirements parser for PLM system."""
+
 import os
-import yaml
+import logging
 import frontmatter
 from dataclasses import dataclass
 from typing import Dict, List, Optional
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Requirement:
+    """Requirement data model."""
     id: str
     domain: str
-    linked_blocks: List[str]
     description: str
+    linked_blocks: List[str]
+    additional_notes: List[str]
     content: str
 
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            'id': self.id,
+            'domain': self.domain,
+            'description': self.description,
+            'linked_blocks': self.linked_blocks,
+            'additional_notes': self.additional_notes,
+            'content': self.content
+        }
+
 class RequirementsParser:
-    def __init__(self, requirements_dir: str):
-        self.requirements_dir = requirements_dir
+    """Parser for requirements in markdown format."""
+    
+    def __init__(self, workspace_dir: str = "/work"):
+        """Initialize the parser with workspace directory."""
+        self.workspace_dir = Path(workspace_dir)
+        self.requirements_dir = self.workspace_dir / "requirements"
         self.requirements: Dict[str, Requirement] = {}
+        
+        # Create workspace structure if it doesn't exist
+        self._ensure_workspace_structure()
+
+    def _ensure_workspace_structure(self):
+        """Ensure the workspace directory structure exists."""
+        logger.info(f"Ensuring workspace structure in {self.workspace_dir}")
+        
+        # Create main directories
+        (self.workspace_dir / "requirements").mkdir(parents=True, exist_ok=True)
+        (self.workspace_dir / "generated").mkdir(parents=True, exist_ok=True)
+        (self.workspace_dir / "architecture").mkdir(parents=True, exist_ok=True)
 
     def parse_all(self) -> Dict[str, Requirement]:
-        """Parse all requirement files in the requirements directory and its subdirectories."""
-        self.requirements = {}  # Clear existing requirements
+        """Parse all requirements from the workspace."""
+        logger.info(f"Parsing requirements from {self.requirements_dir}")
+        self.requirements.clear()
         
-        if not os.path.exists(self.requirements_dir):
-            os.makedirs(self.requirements_dir)
-            # Create demo requirements if directory is empty
+        if not self.requirements_dir.exists():
+            logger.warning(f"Requirements directory not found: {self.requirements_dir}")
             self._create_demo_requirements()
+            return self.requirements
+
+        # Parse all .md files in subdirectories
+        for req_file in self.requirements_dir.glob("**/*.md"):
+            try:
+                with open(req_file) as f:
+                    post = frontmatter.load(f)
+                    
+                    # Extract metadata
+                    req_id = post.get('id', '')
+                    if not req_id:
+                        logger.warning(f"Skipping {req_file}: No requirement ID found")
+                        continue
+                        
+                    # Create requirement object
+                    self.requirements[req_id] = Requirement(
+                        id=req_id,
+                        domain=post.get('domain', ''),
+                        description=post.get('description', ''),
+                        linked_blocks=post.get('linked_blocks', []),
+                        additional_notes=self._extract_notes(post.content),
+                        content=post.content
+                    )
+                    logger.debug(f"Parsed requirement: {req_id}")
+                    
+            except Exception as e:
+                logger.error(f"Error parsing {req_file}: {str(e)}")
+                continue
         
-        for root, _, files in os.walk(self.requirements_dir):
-            for file in files:
-                if file.endswith('.md'):
-                    file_path = os.path.join(root, file)
-                    self._parse_file(file_path)
+        if not self.requirements:
+            logger.info("No requirements found, creating demo requirements")
+            self._create_demo_requirements()
+            
         return self.requirements
 
-    def _parse_file(self, file_path: str) -> None:
-        """Parse a single requirement file."""
-        with open(file_path, 'r', encoding='utf-8') as f:
-            post = frontmatter.load(f)
-            
-            # Validate required fields
-            required_fields = ['id', 'domain', 'linked_blocks', 'description']
-            for field in required_fields:
-                if field not in post.metadata:
-                    raise ValueError(f"Missing required field '{field}' in {file_path}")
-
-            req = Requirement(
-                id=post.metadata['id'],
-                domain=post.metadata['domain'],
-                linked_blocks=post.metadata['linked_blocks'],
-                description=post.metadata['description'],
-                content=post.content
-            )
-            self.requirements[req.id] = req
+    def _extract_notes(self, content: str) -> List[str]:
+        """Extract additional notes from requirement content."""
+        notes = []
+        in_notes = False
+        
+        for line in content.split('\n'):
+            if '**Additional Notes:**' in line:
+                in_notes = True
+                continue
+            elif in_notes and line.strip().startswith('-'):
+                notes.append(line.strip()[1:].strip())
+            elif in_notes and line.strip() and not line.strip().startswith('-'):
+                in_notes = False
+                
+        return notes
 
     def validate_block_references(self, architecture_blocks: List[str]) -> List[str]:
         """Validate that all block references exist in the architecture."""
@@ -60,107 +117,33 @@ class RequirementsParser:
             for block_id in req.linked_blocks:
                 if block_id not in architecture_blocks:
                     errors.append(f"Requirement {req_id} references non-existent block {block_id}")
-        return errors 
+        return errors
 
     def _create_demo_requirements(self):
         """Create demo requirements if none exist."""
         demo_reqs = [
             {
-                'id': 'RQ-UI-001',
-                'domain': 'ui',
-                'description': 'Elevator shall have UI with floor buttons and a real-time display.',
-                'linked_blocks': ['BLK-UI-DISPLAY', 'BLK-UI-BUTTONS'],
-                'content': '''# Requirement RQ-UI-001
+                'id': 'RQ-DEMO-001',
+                'domain': 'demo',
+                'description': 'Example requirement to demonstrate the system.',
+                'linked_blocks': ['BLK-DEMO'],
+                'content': '''# Requirement RQ-DEMO-001
 
 **Description:**  
-The elevator shall include physical buttons for selecting floors and an accompanying digital display that shows the current floor and direction of travel.
+This is an example requirement to demonstrate the system structure.
 
 **Additional Notes:**  
-- The display updates in real-time.
-- The number of buttons depends on the number of floors.
-- The display should show:
-  - Current floor number
-  - Direction of travel (up/down)
-  - Status messages (e.g., "Door Opening", "Door Closing")'''
-            },
-            {
-                'id': 'RQ-UI-002',
-                'domain': 'ui',
-                'description': 'Elevator shall have an alarm system with audio and visual indicators.',
-                'linked_blocks': ['BLK-UI-ALARM', 'BLK-ALARM-COMM'],
-                'content': '''# Requirement RQ-UI-002
-
-**Description:**  
-The elevator shall include an alarm system that provides both audio and visual indicators for emergency situations.
-
-**Additional Notes:**  
-- Audio alarm with configurable volume
-- Visual strobe light for hearing-impaired users
-- Emergency button with tactile feedback
-- Direct communication link to building security
-- Battery backup for alarm system'''
-            },
-            {
-                'id': 'RQ-MD-001',
-                'domain': 'motor_and_doors',
-                'description': 'Elevator motor control system for vertical movement',
-                'linked_blocks': ['BLK-MOTOR'],
-                'content': '''# Requirement RQ-MD-001
-
-**Description:**  
-The elevator motor control system shall provide precise control of vertical movement between floors, including acceleration and deceleration profiles for passenger comfort.
-
-**Additional Notes:**  
-- Support variable speed control
-- Implement smooth acceleration and deceleration
-- Include emergency stop capability
-- Monitor motor temperature and current draw
-- Support both up and down movement
-- Implement position feedback for accurate floor leveling'''
-            },
-            {
-                'id': 'RQ-MD-002',
-                'domain': 'motor_and_doors',
-                'description': 'Automatic door control system with safety features',
-                'linked_blocks': ['BLK-DOOR'],
-                'content': '''# Requirement RQ-MD-002
-
-**Description:**  
-The door control system shall provide smooth and safe operation of the elevator doors with obstacle detection.
-
-**Additional Notes:**  
-- Obstacle detection and auto-reverse
-- Adjustable door timing
-- Emergency manual operation
-- Door position monitoring
-- Energy-efficient operation
-- Sound indication during door movement'''
-            },
-            {
-                'id': 'RQ-SYS-001',
-                'domain': 'system',
-                'description': 'Over-the-air (OTA) update capability for all subsystems',
-                'linked_blocks': ['BLK-OTA'],
-                'content': '''# Requirement RQ-SYS-001
-
-**Description:**  
-The system shall support secure over-the-air updates for all software components with rollback capability.
-
-**Additional Notes:**  
-- Secure update mechanism
-- Version control and rollback
-- Update progress monitoring
-- Automatic integrity verification
-- Scheduled update windows
-- Minimal downtime during updates'''
+- This is a placeholder requirement
+- Replace with actual project requirements
+- Place requirements in /work/requirements'''
             }
         ]
         
         for req in demo_reqs:
-            domain_dir = os.path.join(self.requirements_dir, req['domain'])
-            os.makedirs(domain_dir, exist_ok=True)
+            domain_dir = self.requirements_dir / req['domain']
+            domain_dir.mkdir(parents=True, exist_ok=True)
             
-            filepath = os.path.join(domain_dir, f"{req['id'].lower()}.md")
+            filepath = domain_dir / f"{req['id'].lower()}.md"
             with open(filepath, 'w') as f:
                 f.write('---\n')
                 f.write(f"id: {req['id']}\n")
@@ -169,3 +152,12 @@ The system shall support secure over-the-air updates for all software components
                 f.write(f"description: \"{req['description']}\"\n")
                 f.write('---\n\n')
                 f.write(req['content'])
+            
+            self.requirements[req['id']] = Requirement(
+                id=req['id'],
+                domain=req['domain'],
+                description=req['description'],
+                linked_blocks=req['linked_blocks'],
+                additional_notes=self._extract_notes(req['content']),
+                content=req['content']
+            )

@@ -7,6 +7,7 @@ from pathlib import Path
 import os
 import logging
 import openai
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -61,13 +62,13 @@ class OpenAIService(IAIService):
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
-        openai.api_key = self.api_key
+        self.client = AsyncOpenAI(api_key=self.api_key)
         logger.info("OpenAIService initialized")
 
     async def _get_completion(self, prompt: str, max_tokens: int = 2000) -> str:
         """Get completion from OpenAI API."""
         try:
-            response = await openai.ChatCompletion.acreate(
+            response = await self.client.chat.completions.create(
                 model="gpt-4",
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant specializing in software engineering, requirements analysis, and code generation."},
@@ -75,7 +76,6 @@ class OpenAIService(IAIService):
                 ],
                 max_tokens=max_tokens,
                 temperature=0.7,
-                top_p=1.0,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
@@ -143,34 +143,69 @@ class OpenAIService(IAIService):
 
     async def generate_code(self, requirement: dict) -> GeneratedCode:
         """Generate code implementation for a requirement."""
+        logger.debug(f"Received requirement dict: {requirement}")
+        
+        # Validate required fields
+        required_fields = ['id', 'description', 'linked_blocks', 'additional_notes']
+        logger.debug(f"Checking required fields: {required_fields}")
+        logger.debug(f"Available fields: {list(requirement.keys())}")
+        
+        for field in required_fields:
+            if field not in requirement:
+                error_msg = f"Missing required field: {field}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
         logger.info(f"Generating code for requirement: {requirement['id']}")
         
-        # Load the code generation prompt template
-        prompt_path = Path(__file__).parent / "prompts" / "generate_code.txt"
-        with open(prompt_path) as f:
-            prompt_template = f.read()
-
-        # Format the prompt
-        notes = "\n".join(f"- {note}" for note in requirement.get('additional_notes', []))
-        prompt = prompt_template.format(
-            requirement=requirement,
-            notes=notes
-        )
-
         try:
+            # Load the code generation prompt template
+            prompt_path = Path(__file__).parent / "prompts" / "generate_code.txt"
+            with open(prompt_path) as f:
+                prompt_template = f.read()
+
+            # Format the prompt
+            notes = "\n".join(f"- {note}" for note in requirement.get('additional_notes', []))
+            try:
+                prompt = prompt_template.format(
+                    requirement=requirement,
+                    notes=notes
+                )
+                logger.debug(f"Generated prompt: {prompt}")
+            except KeyError as e:
+                logger.error(f"Error formatting prompt. Missing key: {e}")
+                logger.debug(f"Requirement keys available: {list(requirement.keys())}")
+                raise
+
             # Get completion from OpenAI
             response = await self._get_completion(prompt, max_tokens=3000)
             
+            # Clean up the response to ensure it's just code
+            code = response
+            if "```python" in response:
+                # Extract code from markdown code blocks if present
+                code_blocks = response.split("```python")
+                if len(code_blocks) > 1:
+                    code = code_blocks[1].split("```")[0].strip()
+            
+            # Add requirement tag to the code
+            code = f"""# Requirement: {requirement['id']}
+# Description: {requirement['description']}
+
+{code}"""
+            
             # Extract the block ID from linked blocks
             block_id = requirement['linked_blocks'][0] if requirement['linked_blocks'] else "BLK-UNKNOWN"
+            logger.debug(f"Using block ID: {block_id}")
             
             return GeneratedCode(
                 block_id=block_id,
-                code=response
+                code=code
             )
 
         except Exception as e:
             logger.error(f"Error generating code: {str(e)}")
+            logger.exception("Detailed traceback:")
             raise
 
     async def enhance_code_with_tests(self, generated: GeneratedCode) -> GeneratedCode:
@@ -178,21 +213,35 @@ class OpenAIService(IAIService):
         logger.info(f"Enhancing code with tests for block: {generated.block_id}")
         
         prompt = f"""
-Given the following Python code, generate comprehensive unit tests:
+Generate pytest-based unit tests for the following Python code. 
+IMPORTANT: Provide ONLY the test code without any markdown formatting, comments outside the code, or explanatory text.
+The output should be pure Python code that can be directly saved to a test file and executed.
+
+Code to test:
 
 {generated.code}
 
-Generate pytest-based unit tests that:
+Your test code should:
 1. Test all public methods and functions
 2. Include edge cases and error conditions
 3. Use appropriate fixtures and mocks
 4. Follow testing best practices
-5. Include docstrings and comments
+5. Include docstrings and comments within the code
+
+Begin your response with the imports and end with the test functions. Do not include any text before or after the code.
 """
 
         try:
             # Get completion from OpenAI
-            tests = await self._get_completion(prompt, max_tokens=2000)
+            response = await self._get_completion(prompt, max_tokens=2000)
+            
+            # Clean up the response to ensure it's just code
+            tests = response
+            if "```python" in response:
+                # Extract code from markdown code blocks if present
+                code_blocks = response.split("```python")
+                if len(code_blocks) > 1:
+                    tests = code_blocks[1].split("```")[0].strip()
             
             # Return enhanced code with tests
             return GeneratedCode(
@@ -203,6 +252,7 @@ Generate pytest-based unit tests that:
 
         except Exception as e:
             logger.error(f"Error enhancing code with tests: {str(e)}")
+            logger.exception("Detailed traceback:")
             raise
 
     async def suggest_architecture_improvements(self, current_architecture: str) -> str:
