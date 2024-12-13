@@ -9,6 +9,7 @@ import os
 import frontmatter
 import sys
 import logging
+import yaml
 from pathlib import Path
 from datetime import datetime
 
@@ -83,18 +84,82 @@ class ArchitectureResponse(BaseModel):
     root_id: str
     blocks: Dict[str, ArchitectureBlock]
 
-app = FastAPI(title="PLM Web Interface")
+class PLMSettings(BaseModel):
+    """Settings model for PLM."""
+    source_folder: str = "src"
+    requirements_folder: str = "requirements"
+    architecture_folder: str = "architecture"
+    generated_folder: str = "generated"
+    folder_structure: str = "hierarchical"  # or "flat"
+    preferred_languages: List[str] = ["python", "javascript"]
+    custom_llm_instructions: str = ""
+    source_include_patterns: List[str] = ["**/*.py", "**/*.js", "**/*.ts"]
+    source_exclude_patterns: List[str] = ["**/node_modules/**", "**/__pycache__/**", "**/venv/**"]
 
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # Vite dev server
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    @classmethod
+    def get_default_settings(cls) -> "PLMSettings":
+        """Get default settings with comments."""
+        return cls()
 
-# Initialize components
+def load_settings() -> PLMSettings:
+    """Load settings from file or create default."""
+    settings_path = Path(WORKSPACE_DIR) / "plm_settings.yaml"
+    if settings_path.exists():
+        with open(settings_path, "r") as f:
+            return PLMSettings(**yaml.safe_load(f))
+    return PLMSettings.get_default_settings()
+
+def save_settings(settings: PLMSettings):
+    """Save settings to YAML file with comments."""
+    settings_path = Path(WORKSPACE_DIR) / "plm_settings.yaml"
+    
+    # Create settings dict with comments
+    settings_dict = settings.model_dump()
+    
+    # Add comments to the YAML output
+    yaml_str = """# PLM Settings Configuration
+# Folder paths relative to workspace
+source_folder: {source_folder}
+requirements_folder: {requirements_folder}
+architecture_folder: {architecture_folder}
+generated_folder: {generated_folder}
+
+# Folder structure preference (hierarchical or flat)
+folder_structure: {folder_structure}
+
+# Preferred programming languages for code generation
+preferred_languages:
+{languages}
+
+# Custom instructions for LLM interactions
+custom_llm_instructions: {custom_llm_instructions}
+
+# Source code scanning patterns
+source_include_patterns:
+{includes}
+
+# Patterns to exclude from source scanning
+source_exclude_patterns:
+{excludes}
+""".format(
+        source_folder=settings_dict["source_folder"],
+        requirements_folder=settings_dict["requirements_folder"],
+        architecture_folder=settings_dict["architecture_folder"],
+        generated_folder=settings_dict["generated_folder"],
+        folder_structure=settings_dict["folder_structure"],
+        languages="\n".join(f"  - {lang}" for lang in settings_dict["preferred_languages"]),
+        custom_llm_instructions=settings_dict["custom_llm_instructions"],
+        includes="\n".join(f"  - {pattern}" for pattern in settings_dict["source_include_patterns"]),
+        excludes="\n".join(f"  - {pattern}" for pattern in settings_dict["source_exclude_patterns"])
+    )
+    
+    with open(settings_path, "w") as f:
+        f.write(yaml_str)
+
+# Initialize components with settings
+settings = load_settings()
+WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/work")
+
 parser = RequirementsParser(WORKSPACE_DIR)
 mapper = RequirementsMapper(WORKSPACE_DIR)
 
@@ -126,6 +191,17 @@ def convert_architecture_to_dict(block: Block) -> dict:
         "root_id": block.block_id,
         "blocks": blocks
     }
+
+app = FastAPI(title="PLM Web Interface")
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],  # Vite dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/api/requirements")
 async def get_requirements():
@@ -279,4 +355,25 @@ async def generate_code(request: CodeGenerationRequest):
     except Exception as e:
         logger.error(f"Error generating code: {str(e)}")
         logger.exception("Detailed traceback:")
+        raise HTTPException(status_code=500, detail=str(e)) 
+
+@app.get("/api/settings")
+async def get_settings():
+    """Get current PLM settings."""
+    logger.info("Fetching settings")
+    try:
+        return load_settings()
+    except Exception as e:
+        logger.error(f"Error fetching settings: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/settings")
+async def update_settings(new_settings: PLMSettings):
+    """Update PLM settings."""
+    logger.info("Updating settings")
+    try:
+        save_settings(new_settings)
+        return {"message": "Settings updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating settings: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e)) 

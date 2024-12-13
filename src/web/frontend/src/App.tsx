@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { ReactFlowProvider } from 'reactflow';
-import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem } from '@chakra-ui/react';
+import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem, IconButton } from '@chakra-ui/react';
+import { SettingsIcon } from '@chakra-ui/icons';
 import ArchitectureEditor from './components/ArchitectureEditor';
 import RequirementsList from './components/RequirementsList';
 import RequirementViewer from './components/RequirementViewer';
 import RequirementGenerator from './components/RequirementGenerator';
 import CodeGenerator from './components/CodeGenerator';
+import { SettingsDialog } from './components/SettingsDialog';
 import theme from './theme';
 
 function App() {
@@ -13,6 +15,7 @@ function App() {
   const [architecture, setArchitecture] = useState(null);
   const [selectedRequirement, setSelectedRequirement] = useState(null);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const toast = useToast();
 
   useEffect(() => {
@@ -90,7 +93,15 @@ function App() {
 
   return (
     <Box minH="100vh" bg="gray.50" p={4}>
-      <Heading as="h1" size="xl" mb={6}>PLM Web Interface</Heading>
+      <HStack justify="space-between" mb={6}>
+        <Heading as="h1" size="xl">PLM Web Interface</Heading>
+        <IconButton
+          aria-label="Settings"
+          icon={<SettingsIcon />}
+          onClick={() => setIsSettingsOpen(true)}
+          variant="ghost"
+        />
+      </HStack>
       <Grid
         templateColumns={{ base: "1fr", lg: "350px 1fr" }}
         gap={6}
@@ -137,6 +148,11 @@ function App() {
           }}
         />
       )}
+
+      <SettingsDialog
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </Box>
   );
 }
