@@ -1,7 +1,9 @@
+"""Architecture visualization service."""
+
 from typing import Dict
 import graphviz
-from architecture import Block
-from requirements_parser import Requirement
+from .architecture import Block
+from .requirements_parser import Requirement
 
 class ArchitectureVisualizer:
     def __init__(self, requirements: Dict[str, Requirement]):
@@ -79,4 +81,4 @@ class ArchitectureVisualizer:
                     dot.edge(block_ids[i], block_ids[i + 1], 
                            label=req_id,
                            style='dashed',
-                           color='blue')
+                           color='blue') 

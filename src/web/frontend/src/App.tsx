@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ReactFlowProvider } from 'reactflow';
-import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem, IconButton, useDisclosure } from '@chakra-ui/react';
+import { ChakraProvider, Box, VStack, HStack, Heading, useToast, Grid, GridItem, IconButton, useDisclosure, Tabs, TabList, TabPanels, Tab, TabPanel } from '@chakra-ui/react';
 import { SettingsIcon } from '@chakra-ui/icons';
 import ArchitectureEditor from './components/ArchitectureEditor';
 import RequirementsList from './components/RequirementsList';
@@ -9,14 +9,48 @@ import RequirementGenerator from './components/RequirementGenerator';
 import CodeGenerator from './components/CodeGenerator';
 import { SettingsDialog } from './components/SettingsDialog';
 import theme from './theme';
+import CodeAnalyzer from './components/CodeAnalyzer';
+
+// Add type interfaces
+interface Requirement {
+  id: string;
+  domain: string;
+  description: string;
+  linked_blocks: string[];
+  additional_notes: string[];
+  content: string;
+  code_references: Array<{
+    file: string;
+    line: number;
+    function: string;
+    type: string;
+    url: string;
+  }>;
+}
+
+interface Architecture {
+  root_id: string;
+  blocks: Record<string, {
+    block_id: string;
+    name: string;
+    requirements: string[];
+    subblocks: string[];
+    x: number;
+    y: number;
+  }>;
+}
+
+// Add after imports
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 function App() {
-  const [requirements, setRequirements] = useState({});
-  const [architecture, setArchitecture] = useState(null);
-  const [selectedRequirement, setSelectedRequirement] = useState(null);
+  const [requirements, setRequirements] = useState<Record<string, Requirement>>({});
+  const [architecture, setArchitecture] = useState<Architecture | null>(null);
+  const [selectedRequirement, setSelectedRequirement] = useState<Requirement | null>(null);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const { isOpen: isSettingsOpen, onOpen: openSettings, onClose: closeSettings } = useDisclosure();
   const [isSettingsConfigured, setIsSettingsConfigured] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     // Load initial data
@@ -28,19 +62,36 @@ function App() {
 
   const checkSettings = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/settings');
+      const response = await fetch(`${BACKEND_URL}/api/settings`, {
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to load settings');
+      }
+      
       const data = await response.json();
       
       // Consider settings as configured if they've been customized from defaults
-      // or if the settings file exists (any response means file exists)
       setIsSettingsConfigured(true);
       
-      // If settings don't exist, open settings dialog
-      if (!response.ok || response.status === 404) {
+      // If settings are empty or have default values, open settings dialog
+      if (!data || Object.keys(data).length === 0) {
         openSettings();
       }
     } catch (error) {
       console.error('Error checking settings:', error);
+      toast({
+        title: 'Error loading settings',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
       setIsSettingsConfigured(false);
       openSettings();
     }
@@ -48,7 +99,18 @@ function App() {
 
   const fetchRequirements = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/requirements');
+      const response = await fetch(`${BACKEND_URL}/api/requirements`, {
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch requirements');
+      }
+      
       const data = await response.json();
       setRequirements(data.requirements);
     } catch (error) {
@@ -57,13 +119,25 @@ function App() {
         description: error instanceof Error ? error.message : 'Unknown error',
         status: 'error',
         duration: 5000,
+        isClosable: true,
       });
     }
   };
 
   const fetchArchitecture = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/architecture');
+      const response = await fetch(`${BACKEND_URL}/api/architecture`, {
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
+        }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch architecture');
+      }
+      
       const data = await response.json();
       setArchitecture(data);
     } catch (error) {
@@ -72,21 +146,24 @@ function App() {
         description: error instanceof Error ? error.message : 'Unknown error',
         status: 'error',
         duration: 5000,
+        isClosable: true,
       });
     }
   };
 
-  const handleRequirementSelect = (requirement) => {
+  const handleRequirementSelect = (requirement: Requirement) => {
     setSelectedRequirement(requirement);
     setIsViewerOpen(true);
   };
 
-  const handleRequirementUpdate = async (updatedRequirement) => {
+  const handleRequirementUpdate = async (updatedRequirement: Requirement) => {
     try {
-      const response = await fetch(`http://localhost:8000/api/requirements/${updatedRequirement.id}`, {
+      const response = await fetch(`${BACKEND_URL}/api/requirements/${updatedRequirement.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache'
         },
         body: JSON.stringify(updatedRequirement),
       });
@@ -102,6 +179,7 @@ function App() {
         title: 'Requirement updated',
         status: 'success',
         duration: 3000,
+        isClosable: true,
       });
     } catch (error) {
       toast({
@@ -109,6 +187,7 @@ function App() {
         description: error instanceof Error ? error.message : 'Unknown error',
         status: 'error',
         duration: 5000,
+        isClosable: true,
       });
     }
   };
@@ -150,12 +229,25 @@ function App() {
         <GridItem>
           <VStack spacing={6} align="stretch">
             <Box bg="white" p={4} borderRadius="lg" shadow="sm" h="calc(100vh - 400px)">
-              <ReactFlowProvider>
-                <ArchitectureEditor
-                  architecture={architecture}
-                  onArchitectureUpdate={setArchitecture}
-                />
-              </ReactFlowProvider>
+              <Tabs>
+                <TabList>
+                  <Tab>Architecture</Tab>
+                  <Tab>Code Analysis</Tab>
+                </TabList>
+                <TabPanels>
+                  <TabPanel p={0}>
+                    <ReactFlowProvider>
+                      <ArchitectureEditor
+                        architecture={architecture}
+                        onArchitectureUpdate={setArchitecture}
+                      />
+                    </ReactFlowProvider>
+                  </TabPanel>
+                  <TabPanel p={0}>
+                    <CodeAnalyzer onAnalysisComplete={fetchRequirements} />
+                  </TabPanel>
+                </TabPanels>
+              </Tabs>
             </Box>
             <Box bg="white" p={4} borderRadius="lg" shadow="sm">
               <CodeGenerator requirements={requirements} />

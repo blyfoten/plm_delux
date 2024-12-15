@@ -1,0 +1,29 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install development dependencies
+RUN pip install --no-cache-dir \
+    watchdog \
+    pytest \
+    black \
+    flake8 \
+    mypy
+
+# Create work directory
+RUN mkdir /work
+
+EXPOSE 8000
+
+# Don't copy source code - it will be mounted
+# Keep container running
+CMD ["uvicorn", "src.web.backend.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"] 

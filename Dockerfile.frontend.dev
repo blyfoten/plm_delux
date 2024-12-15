@@ -1,0 +1,29 @@
+FROM node:18-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy package files
+COPY src/web/frontend/package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Install development dependencies
+RUN npm install -D \
+    @types/react \
+    @types/react-dom \
+    @typescript-eslint/eslint-plugin \
+    @typescript-eslint/parser \
+    eslint \
+    prettier
+
+# Don't copy source code - it will be mounted
+EXPOSE 5173
+
+# Keep container running
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"] 

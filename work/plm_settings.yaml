@@ -10,34 +10,33 @@ folder_structure: hierarchical
 # Preferred programming languages for code generation
 preferred_languages:
   - python
+  - c++
   - javascript
 
 # Custom instructions for LLM interactions
-custom_llm_instructions: 
+custom_llm_instructions: ""
 
 # Source code scanning patterns
 source_include_patterns:
-  - **/*.py
-  - **/*.js
-  - **/*.ts
+  - "**/*.py"
+  - "**/*.js"
+  - "**/*.ts"
+  - "**/*.cpp"
+  - "**/*.hpp"
 
 # Patterns to exclude from source scanning
 source_exclude_patterns:
-  - **/node_modules/**
-  - **/__pycache__/**
-  - **/venv/**
+  - "**/node_modules/**"
+  - "**/__pycache__/**"
+  - "**/venv/**"
 
 # Domain configurations
 domains:
-  ui:
-    name: User Interface
-    description: User interface components and interactions
-
-  motor_and_doors:
-    name: Motor and Doors
-    description: Motor control and door management systems
-
-  offboard:
-    name: Offboard Systems
-    description: External and cloud-based systems
-
+  server:
+    name: Simulation Server
+    description: Simulation Server and Controller
+    subdomain_ids: []
+  client:
+    name: Simulation Client
+    description: Simulation Clinent and fmu-loader
+    subdomain_ids: []
