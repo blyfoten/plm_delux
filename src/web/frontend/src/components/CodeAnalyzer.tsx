@@ -25,6 +25,14 @@ import {
   ButtonGroup,
   Checkbox,
   Center,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalFooter,
+  ModalBody,
+  ModalCloseButton,
+  useDisclosure,
 } from '@chakra-ui/react';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
@@ -83,6 +91,21 @@ const getErrorMessage = async (response: Response) => {
   return text;
 };
 
+// Add new interfaces
+interface DomainRecommendation {
+  domain_id: string;
+  name: string;
+  description: string;
+  subdomain_ids: string[];
+  confidence: number;
+  reasoning: string;
+}
+
+interface DomainRecommendations {
+  recommendations: DomainRecommendation[];
+  changes_detected: boolean;
+}
+
 const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isLoadingCache, setIsLoadingCache] = useState(true);
@@ -97,6 +120,11 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
   const [results, setResults] = useState<Record<string, FileAnalysis>>({});
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const toast = useToast();
+  const { isOpen: isRecommendationsOpen, onOpen: onRecommendationsOpen, onClose: onRecommendationsClose } = useDisclosure();
+  const [domainRecommendations, setDomainRecommendations] = useState<DomainRecommendations | null>(null);
+  const [isGeneratingRequirements, setIsGeneratingRequirements] = useState(false);
+  const [isCheckingDomains, setIsCheckingDomains] = useState(false);
+  const [availableDomains, setAvailableDomains] = useState<string[]>([]);
 
   // Load cached results on mount
   useEffect(() => {
@@ -396,11 +424,207 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
     }
   };
 
+  // Function to check domain recommendations
+  const checkDomainRecommendations = async () => {
+    try {
+      setIsCheckingDomains(true);
+      const response = await fetch(`${BACKEND_URL}/api/analyze/recommend-domains`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const recommendations = await response.json();
+      setDomainRecommendations(recommendations);
+
+      if (recommendations.changes_detected) {
+        onRecommendationsOpen();
+      } else {
+        toast({
+          title: 'Domain Check Complete',
+          description: 'Current domain structure is optimal for the codebase.',
+          status: 'success',
+          duration: 5000,
+        });
+      }
+    } catch (error) {
+      log.error('Error checking domain recommendations:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to check domain recommendations',
+        status: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setIsCheckingDomains(false);
+    }
+  };
+
+  // Function to apply domain recommendations
+  const applyDomainRecommendations = async () => {
+    try {
+      if (!domainRecommendations) return;
+
+      // Update settings with new domain structure
+      const response = await fetch(`${BACKEND_URL}/api/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          domains: domainRecommendations.recommendations.reduce((acc, rec) => ({
+            ...acc,
+            [rec.domain_id]: {
+              name: rec.name,
+              description: rec.description,
+              subdomain_ids: rec.subdomain_ids,
+            }
+          }), {})
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      toast({
+        title: 'Domains Updated',
+        description: 'Domain structure has been updated successfully.',
+        status: 'success',
+        duration: 5000,
+      });
+
+      // Refresh results to show new domain assignments
+      await fetchResults();
+      onRecommendationsClose();
+    } catch (error) {
+      log.error('Error applying domain recommendations:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to apply domain recommendations',
+        status: 'error',
+        duration: 5000,
+      });
+    }
+  };
+
+  // Function to generate requirements
+  const generateRequirements = async () => {
+    try {
+      setIsGeneratingRequirements(true);
+      const response = await fetch(`${BACKEND_URL}/api/analyze/generate-requirements`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          files: selectedFiles.length > 0 ? selectedFiles : null
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const result = await response.json();
+      toast({
+        title: 'Requirements Generated',
+        description: `Generated ${result.requirements.length} requirements in ${result.generated_files.length} files.`,
+        status: 'success',
+        duration: 5000,
+      });
+
+      // Show a more detailed toast with file paths
+      if (result.generated_files.length > 0) {
+        toast({
+          title: 'Generated Files',
+          description: (
+            <VStack align="stretch" spacing={1}>
+              {result.generated_files.map((file: string, index: number) => (
+                <Text key={index} fontSize="sm">{file}</Text>
+              ))}
+            </VStack>
+          ),
+          status: 'info',
+          duration: 10000,
+          isClosable: true,
+        });
+      }
+
+      // Refresh requirements listing
+      const reqResponse = await fetch(`${BACKEND_URL}/api/requirements`);
+      if (reqResponse.ok) {
+        const reqData = await reqResponse.json();
+        // Assuming you have a requirements state and setter from props or context
+        if (onAnalysisComplete) {
+          onAnalysisComplete();
+        }
+      }
+    } catch (error) {
+      log.error('Error generating requirements:', error);
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to generate requirements',
+        status: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setIsGeneratingRequirements(false);
+    }
+  };
+
+  // Add useEffect to check domains when cache is loaded
+  useEffect(() => {
+    if (!isLoadingCache && Object.keys(results).length > 0) {
+      checkDomainRecommendations();
+    }
+  }, [isLoadingCache]);
+
+  // Add useEffect to fetch available domains from settings
+  useEffect(() => {
+    const fetchDomains = async () => {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/settings`);
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+        const settings = await response.json();
+        setAvailableDomains(Object.keys(settings.domains));
+      } catch (error) {
+        log.error('Error fetching domains:', error);
+      }
+    };
+    fetchDomains();
+  }, []);
+
   return (
     <VStack spacing={6} align="stretch" height="100%">
       <HStack justify="space-between">
         <Heading size="md">Code Analysis</Heading>
         <ButtonGroup>
+          <Button
+            colorScheme="purple"
+            onClick={generateRequirements}
+            isLoading={isGeneratingRequirements}
+            loadingText="Generating..."
+          >
+            Generate Requirements
+          </Button>
+          <Button
+            colorScheme="teal"
+            onClick={checkDomainRecommendations}
+            isLoading={isCheckingDomains}
+            loadingText="Checking..."
+          >
+            Check Domains
+          </Button>
           <Button
             colorScheme="blue"
             onClick={analyzeSelectedFiles}
@@ -420,6 +644,51 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
           </Button>
         </ButtonGroup>
       </HStack>
+
+      {/* Domain Recommendations Modal */}
+      <Modal isOpen={isRecommendationsOpen} onClose={onRecommendationsClose} size="xl">
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Domain Structure Recommendations</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody>
+            <VStack align="stretch" spacing={4}>
+              {domainRecommendations?.recommendations.map((rec) => (
+                <Box key={rec.domain_id} p={4} borderWidth={1} borderRadius="md">
+                  <HStack justify="space-between" mb={2}>
+                    <Text fontWeight="bold">{rec.name}</Text>
+                    <Badge colorScheme={rec.confidence > 0.7 ? 'green' : 'yellow'}>
+                      {Math.round(rec.confidence * 100)}% confidence
+                    </Badge>
+                  </HStack>
+                  <Text fontSize="sm" mb={2}>{rec.description}</Text>
+                  {rec.subdomain_ids.length > 0 && (
+                    <Box>
+                      <Text fontSize="sm" fontWeight="bold">Subdomains:</Text>
+                      <HStack wrap="wrap">
+                        {rec.subdomain_ids.map((sub) => (
+                          <Tag key={sub} size="sm" colorScheme="blue">
+                            <TagLabel>{sub}</TagLabel>
+                          </Tag>
+                        ))}
+                      </HStack>
+                    </Box>
+                  )}
+                  <Text fontSize="xs" color="gray.600" mt={2}>{rec.reasoning}</Text>
+                </Box>
+              ))}
+            </VStack>
+          </ModalBody>
+          <ModalFooter>
+            <ButtonGroup>
+              <Button variant="ghost" onClick={onRecommendationsClose}>Cancel</Button>
+              <Button colorScheme="blue" onClick={applyDomainRecommendations}>
+                Apply Recommendations
+              </Button>
+            </ButtonGroup>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
 
       {/* Progress Section */}
       {(isAnalyzing || progress.status === 'completed') && (

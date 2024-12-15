@@ -2,10 +2,11 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import os
 import logging
 import traceback
+import json
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
@@ -40,6 +41,11 @@ class IAIService(ABC):
     @abstractmethod
     async def determine_domain(self, file_content: str, available_domains: List[str]) -> Optional[str]:
         """Determine the most appropriate domain for a file based on its content."""
+        pass
+
+    @abstractmethod
+    async def recommend_domains(self, context: str) -> Dict[str, Any]:
+        """Generate domain recommendations based on code analysis."""
         pass
 
 class OpenAIService(IAIService):
@@ -147,50 +153,87 @@ Consider adding more documentation"""
             logger.debug(f"Context preview: {context[:200]}...")
             
             prompt = f"""Based on the following code analysis context, generate requirements for the {domain} domain.
-Format each requirement as:
-- ID (format: RQ-{domain.upper()}-XXX where XXX is a number)
-- Description (clear, concise requirement statement)
-- Additional notes (implementation considerations)
-- Suggested linked blocks (architectural components that should implement this)
+Format each requirement exactly as follows (no markdown headers):
+
+RQ-{domain.upper()}-XXX (where XXX is a sequential number)
+Description: (clear, concise requirement statement)
+Additional Notes:
+- (implementation consideration 1)
+- (implementation consideration 2)
+Linked Blocks:
+- (architectural component 1)
+- (architectural component 2)
+
+Generate 5-8 well-defined requirements that cover the key functionality and characteristics shown in the context.
+Focus on both functional and non-functional requirements.
+Make sure each requirement is specific, measurable, and testable.
 
 Context:
-{context}
-
-Generate 3-5 well-defined requirements."""
+{context}"""
 
             response = await self._get_completion(prompt, max_tokens=2000, temperature=0.7)
             logger.debug(f"Generated requirements response: {response[:200]}...")
+            logger.debug("Full response for debugging:")
+            logger.debug(response)
             
             # Parse the response into requirements
             requirements = []
             current_req = None
             
-            for line in response.split('\n'):
-                line = line.strip()
-                if line.startswith('RQ-'):
+            lines = [line.strip() for line in response.split('\n') if line.strip()]
+            
+            for i, line in enumerate(lines):
+                # Remove any markdown formatting
+                line = line.replace('###', '').strip()
+                
+                if 'RQ-' in line:
+                    # If we have a previous requirement, add it to the list
                     if current_req:
+                        logger.debug(f"Adding requirement: {current_req.id}")
                         requirements.append(current_req)
+                    
+                    # Extract the requirement ID (everything up to the first space)
+                    req_id = line.split()[0] if ' ' in line else line
+                    logger.debug(f"Found requirement ID: {req_id}")
+                    
                     current_req = GeneratedRequirement(
-                        id=line,
+                        id=req_id,
                         domain=domain,
                         description="",
                         linked_blocks=[],
                         additional_notes=[]
                     )
                 elif current_req:
-                    if line.startswith('- Description:'):
-                        current_req.description = line.replace('- Description:', '').strip()
-                    elif line.startswith('- Additional notes:'):
-                        current_req.additional_notes.append(line.replace('- Additional notes:', '').strip())
-                    elif line.startswith('- Linked blocks:'):
-                        blocks = line.replace('- Linked blocks:', '').strip()
-                        current_req.linked_blocks = [b.strip() for b in blocks.split(',')]
+                    if line.startswith('Description:'):
+                        current_req.description = line.replace('Description:', '').strip()
+                        logger.debug(f"Added description: {current_req.description[:50]}...")
+                    elif line.startswith('Additional Notes:'):
+                        continue
+                    elif line.startswith('Linked Blocks:'):
+                        continue
+                    elif line.startswith('-'):
+                        item = line[1:].strip()
+                        # Look at the previous non-empty line to determine the section
+                        prev_line = next((l for l in reversed(lines[:i]) if l), '')
+                        if 'Additional Notes:' in prev_line or (current_req.additional_notes and not current_req.linked_blocks):
+                            current_req.additional_notes.append(item)
+                            logger.debug(f"Added note: {item}")
+                        elif 'Linked Blocks:' in prev_line or current_req.linked_blocks:
+                            current_req.linked_blocks.append(item)
+                            logger.debug(f"Added linked block: {item}")
 
+            # Add the last requirement if there is one
             if current_req:
+                logger.debug(f"Adding final requirement: {current_req.id}")
                 requirements.append(current_req)
             
-            logger.info(f"Generated {len(requirements)} requirements")
-            logger.debug(f"Requirements: {requirements}")
+            logger.info(f"Successfully parsed {len(requirements)} requirements")
+            for req in requirements:
+                logger.debug(f"Requirement {req.id}:")
+                logger.debug(f"  Description: {req.description[:50]}...")
+                logger.debug(f"  Notes: {len(req.additional_notes)} notes")
+                logger.debug(f"  Blocks: {len(req.linked_blocks)} blocks")
+            
             return requirements
             
         except Exception as e:
@@ -232,6 +275,61 @@ Reply with just the domain name, nothing else."""
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
+    async def recommend_domains(self, context: str) -> Dict[str, Any]:
+        """Generate domain recommendations based on code analysis."""
+        try:
+            prompt = f"""Based on the following code analysis context, recommend an optimal domain structure.
+For each recommended domain:
+1. Suggest a clear domain_id (lowercase, underscores)
+2. Provide a descriptive name
+3. Write a brief description of the domain's purpose
+4. List any logical subdomains (if applicable)
+5. Include a confidence score (0.0 to 1.0) for this recommendation
+6. Provide reasoning for this recommendation
+
+Context:
+{context}
+
+Respond in the following JSON format:
+{{
+    "recommendations": [
+        {{
+            "domain_id": "example_domain",
+            "name": "Example Domain",
+            "description": "Description of the domain",
+            "subdomain_ids": ["sub1", "sub2"],
+            "confidence": 0.85,
+            "reasoning": "Explanation for this recommendation"
+        }}
+    ],
+    "changes_detected": true
+}}
+
+Focus on creating a clean, logical separation of concerns. Consider:
+- Code dependencies and coupling
+- Functional relationships
+- Data flow patterns
+- Common architectural patterns
+- Current domain assignments (if any)
+"""
+
+            response = await self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a software architecture expert specializing in domain-driven design."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
+
+            recommendations = json.loads(response.choices[0].message.content)
+            return recommendations
+
+        except Exception as e:
+            logger.error(f"Error generating domain recommendations: {e}")
+            raise
+
 class MockAIService(IAIService):
     """Mock implementation of the AI service for testing."""
 
@@ -270,3 +368,19 @@ Potential issues
     async def determine_domain(self, file_content: str, available_domains: List[str]) -> Optional[str]:
         """Return mock domain."""
         return available_domains[0] if available_domains else None 
+
+    async def recommend_domains(self, context: str) -> Dict[str, Any]:
+        """Return mock domain recommendations."""
+        return {
+            "recommendations": [
+                {
+                    "domain_id": "mock_domain",
+                    "name": "Mock Domain",
+                    "description": "A mock domain for testing",
+                    "subdomain_ids": ["mock_sub1", "mock_sub2"],
+                    "confidence": 0.9,
+                    "reasoning": "This is a mock recommendation for testing purposes"
+                }
+            ],
+            "changes_detected": True
+        }

@@ -600,6 +600,9 @@ async def start_analysis(request: AnalyzeRequest):
                             logger.debug(f"Received analysis for {analysis.file_path}")
                             analysis_results[analysis.file_path] = analysis
                     logger.info("Background analysis task completed successfully")
+                    # Save the analysis results to cache
+                    cache_file = save_analysis_results()
+                    logger.info(f"Analysis results saved to cache: {cache_file}")
                 except Exception as e:
                     logger.error(f"Error in background analysis task: {e}")
                     logger.error(f"Traceback: {traceback.format_exc()}")
@@ -790,8 +793,152 @@ async def analyze_single_file(file_path: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/analyze/generate-requirements")
-async def generate_requirements_from_analysis(request: GenerateRequirementsRequest):
+async def generate_requirements_from_analysis():
     """Generate requirements based on code analysis results."""
+    try:
+        logger.info("Starting requirements generation")
+        # Load latest results if current results are empty
+        if not analysis_results:
+            loaded_results = load_latest_analysis()
+            if loaded_results:
+                analysis_results.update(loaded_results)
+                logger.info(f"Loaded {len(loaded_results)} results from cache")
+            else:
+                logger.warning("No analysis results available")
+                raise HTTPException(
+                    status_code=400,
+                    detail="No analysis results available. Please run analysis first."
+                )
+        
+        # Load current settings to get available domains
+        current_settings = load_settings()
+        available_domains = list(current_settings.domains.keys())
+        logger.info(f"Available domains: {available_domains}")
+        
+        # Ensure requirements directory exists
+        requirements_dir = Path(WORKSPACE_DIR) / current_settings.requirements_folder
+        requirements_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Requirements directory: {requirements_dir}")
+        
+        # Group analyses by their current domains
+        domain_analyses = {}
+        for analysis in analysis_results.values():
+            domain = analysis.domain or 'unassigned'
+            if domain not in domain_analyses:
+                domain_analyses[domain] = []
+            domain_analyses[domain].append(analysis)
+        
+        logger.info(f"Grouped analyses by domains: {list(domain_analyses.keys())}")
+        
+        # Generate context for each domain
+        all_requirements = []
+        generated_files = []
+        for domain, analyses in domain_analyses.items():
+            logger.info(f"Generating requirements for domain: {domain} with {len(analyses)} files")
+            context = f"""Based on code analysis, this group contains {len(analyses)} files.
+Key purposes and functionality:
+
+{chr(10).join(f"- {analysis.purpose}" for analysis in analyses)}
+
+Key dependencies and interfaces:
+{chr(10).join(f"- {dep}" for analysis in analyses for dep in analysis.dependencies)}
+
+Implementation patterns:
+{chr(10).join(f"- {detail}" for analysis in analyses for detail in analysis.implementation_details)}
+
+Files in this domain:
+{chr(10).join(f"- {analysis.file_path}" for analysis in analyses)}
+"""
+            logger.debug(f"Context for domain {domain}: {context[:200]}...")
+            
+            # Generate requirements for this group
+            requirements = await ai.generate_requirements(domain, context)
+            logger.info(f"Generated {len(requirements)} requirements for domain {domain}")
+            
+            # For each requirement, determine the most suitable domain
+            for req in requirements:
+                logger.debug(f"Processing requirement: {req.id}")
+                # Create a context focused on this requirement
+                req_context = f"""Requirement:
+ID: {req.id}
+Description: {req.description}
+Additional Notes: {', '.join(req.additional_notes)}
+
+Available domains: {', '.join(available_domains)}
+
+Please determine the most suitable domain for this requirement based on its content and purpose."""
+                
+                # Determine the best domain for this requirement
+                suggested_domain = await ai.determine_domain(req_context, available_domains)
+                if suggested_domain:
+                    logger.info(f"Requirement {req.id}: suggested domain = {suggested_domain}")
+                    req.domain = suggested_domain
+                
+                # Save requirement to file
+                req_file = requirements_dir / f"{req.id.lower()}.md"
+                req_content = f"""---
+id: {req.id}
+domain: {req.domain}
+---
+
+# {req.description}
+
+## Additional Notes
+{chr(10).join(f'- {note}' for note in req.additional_notes)}
+
+## Linked Blocks
+{chr(10).join(f'- {block}' for block in req.linked_blocks)}
+
+## Implementation Files
+{chr(10).join(f'- {analysis.file_path}' for analysis in analyses)}
+"""
+                try:
+                    req_file.write_text(req_content)
+                    logger.info(f"Saved requirement to file: {req_file}")
+                    generated_files.append(str(req_file))
+                except Exception as e:
+                    logger.error(f"Error saving requirement file {req_file}: {e}")
+                    
+                all_requirements.append(req)
+        
+        # Scan for code references after generating all requirements
+        logger.info("Scanning for code references in generated requirements")
+        mapper.scan_code_for_references()
+        
+        logger.info(f"Generated {len(all_requirements)} total requirements across {len(generated_files)} files")
+        return {
+            "requirements": [
+                {
+                    "id": req.id,
+                    "domain": req.domain,
+                    "description": req.description,
+                    "additional_notes": req.additional_notes,
+                    "linked_blocks": req.linked_blocks,
+                    "file_path": str(requirements_dir / f"{req.id.lower()}.md"),
+                    "code_references": [
+                        {
+                            "file": ref.file,
+                            "line": ref.line,
+                            "function": ref.function,
+                            "type": ref.type,
+                            "url": mapper.get_vscode_url(ref)
+                        }
+                        for ref in mapper.get_references(req.id)
+                    ]
+                }
+                for req in all_requirements
+            ],
+            "generated_files": generated_files
+        }
+        
+    except Exception as e:
+        logger.error(f"Error generating requirements from analysis: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze/recommend-domains")
+async def recommend_domains():
+    """Generate domain recommendations based on code analysis."""
     try:
         # Load latest results if current results are empty
         if not analysis_results:
@@ -803,36 +950,30 @@ async def generate_requirements_from_analysis(request: GenerateRequirementsReque
                     status_code=400,
                     detail="No analysis results available. Please run analysis first."
                 )
+
+        # Load current settings to get existing domains
+        current_settings = load_settings()
         
-        # Filter analyses for the specified domain
-        domain_analyses = [
-            analysis for analysis in analysis_results.values()
-            if analysis.domain == request.domain
-        ]
-        
-        if not domain_analyses:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No analyzed files found for domain: {request.domain}"
-            )
-            
         # Prepare context from analyses
-        context = f"""Based on code analysis, this domain contains {len(domain_analyses)} files.
-Key purposes and functionality:
+        context = "Based on code analysis, here are the analyzed files and their characteristics:\n\n"
+        for file_path, analysis in analysis_results.items():
+            context += f"\nFile: {file_path}\n"
+            context += f"Purpose: {analysis.purpose}\n"
+            context += f"Key functionality: {', '.join(analysis.key_functionality)}\n"
+            context += f"Current domain: {analysis.domain or 'unassigned'}\n"
+            
+        context += "\nCurrent domain structure:\n"
+        for domain_id, domain in current_settings.domains.items():
+            context += f"\n- {domain_id}: {domain.name}"
+            if domain.description:
+                context += f"\n  Description: {domain.description}"
+            if domain.subdomain_ids:
+                context += f"\n  Subdomains: {', '.join(domain.subdomain_ids)}"
 
-{chr(10).join(f"- {analysis.purpose}" for analysis in domain_analyses)}
-
-Key dependencies and interfaces:
-{chr(10).join(f"- {dep}" for analysis in domain_analyses for dep in analysis.dependencies)}
-
-Implementation patterns:
-{chr(10).join(f"- {detail}" for analysis in domain_analyses for detail in analysis.implementation_details)}
-"""
-        
-        # Generate requirements
-        requirements = await ai_service.generate_requirements(request.domain, context)
-        return requirements
+        # Generate domain recommendations using AI
+        recommendations = await ai.recommend_domains(context)
+        return recommendations
         
     except Exception as e:
-        logger.error(f"Error generating requirements from analysis: {e}")
+        logger.error(f"Error generating domain recommendations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
