@@ -37,7 +37,18 @@ services:
       - backend
     networks:
       - plm-network
-
+  vscode:
+    build:
+      context: .
+      dockerfile: Dockerfile.vscode
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./work:/work
+    environment:
+      - WORKSPACE=/work
+    depends_on:
+      - backend
 networks:
   plm-network:
     driver: bridge 

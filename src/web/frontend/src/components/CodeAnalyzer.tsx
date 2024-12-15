@@ -471,13 +471,21 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
     try {
       if (!domainRecommendations) return;
 
-      // Update settings with new domain structure
+      // First, fetch current settings
+      const settingsResponse = await fetch(`${BACKEND_URL}/api/settings`);
+      if (!settingsResponse.ok) {
+        throw new Error(await getErrorMessage(settingsResponse));
+      }
+      const currentSettings = await settingsResponse.json();
+
+      // Update settings with new domain structure while preserving other settings
       const response = await fetch(`${BACKEND_URL}/api/settings`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          ...currentSettings,  // Preserve all existing settings
           domains: domainRecommendations.recommendations.reduce((acc, rec) => ({
             ...acc,
             [rec.domain_id]: {
