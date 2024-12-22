@@ -16,6 +16,8 @@ import {
 interface ArchitectureNodeProps {
   data: {
     label: string;
+    domain?: string;
+    description?: string;
     requirements: string[];
     onUpdate: (id: string, data: any) => void;
   };
@@ -26,9 +28,29 @@ const ArchitectureNode: React.FC<ArchitectureNodeProps> = memo(({ data, id }) =>
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.600');
 
+  // Get domain-specific color
+  const getDomainColor = (domain?: string) => {
+    if (!domain) return 'white';
+    const domainColors: { [key: string]: string } = {
+      UI: 'green.50',
+      BACKEND: 'blue.50',
+      DATABASE: 'pink.50',
+      API: 'yellow.50',
+      CORE: 'gray.50',
+      UTILS: 'purple.50'
+    };
+
+    for (const [key, color] of Object.entries(domainColors)) {
+      if (domain.toLowerCase().includes(key.toLowerCase())) {
+        return color;
+      }
+    }
+    return 'white';
+  };
+
   return (
     <Box
-      bg={bgColor}
+      bg={getDomainColor(data.domain)}
       border="1px"
       borderColor={borderColor}
       borderRadius="md"
@@ -42,6 +64,18 @@ const ArchitectureNode: React.FC<ArchitectureNodeProps> = memo(({ data, id }) =>
         <Text fontWeight="bold" textAlign="center">
           {data.label}
         </Text>
+        
+        {data.domain && (
+          <Badge colorScheme="gray" alignSelf="center">
+            {data.domain}
+          </Badge>
+        )}
+        
+        {data.description && (
+          <Text fontSize="sm" color="gray.600" noOfLines={2}>
+            {data.description}
+          </Text>
+        )}
         
         <Popover trigger="hover" placement="right">
           <PopoverTrigger>

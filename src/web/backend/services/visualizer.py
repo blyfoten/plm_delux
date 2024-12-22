@@ -42,6 +42,12 @@ class ArchitectureVisualizer:
     def _format_node_label(self, block: Block) -> str:
         """Format the node label with block details."""
         label = f"{block.name}\\n({block.block_id})"
+        if block.domain:
+            label += f"\\n[{block.domain}]"
+        if block.description:
+            # Truncate description if too long
+            desc = block.description[:40] + "..." if len(block.description) > 40 else block.description
+            label += f"\\n{desc}"
         if block.requirements:
             label += "\\nRequirements:\\n"
             for req_id in block.requirements:
@@ -54,14 +60,23 @@ class ArchitectureVisualizer:
 
     def _get_domain_color(self, block: Block) -> str:
         """Get color for block based on its domain."""
-        if "UI" in block.block_id:
-            return "lightgreen"
-        elif "MOTOR" in block.block_id:
-            return "lightpink"
-        elif "DOOR" in block.block_id:
-            return "lightyellow"
-        elif "OTA" in block.block_id or "ALARM" in block.block_id:
-            return "lightgray"
+        if not block.domain:
+            return "white"
+            
+        domain_colors = {
+            "UI": "lightgreen",
+            "BACKEND": "lightblue",
+            "DATABASE": "lightpink",
+            "API": "lightyellow",
+            "CORE": "lightgray",
+            "UTILS": "lavender"
+        }
+        
+        # Try to match domain with predefined colors
+        for domain, color in domain_colors.items():
+            if domain.lower() in block.domain.lower():
+                return color
+        
         return "white"
 
     def _add_requirement_connections(self, dot: graphviz.Digraph, system_architecture: Block) -> None:

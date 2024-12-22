@@ -10,7 +10,7 @@ import ReactFlow, {
   addEdge,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Box, useToast } from '@chakra-ui/react';
+import { Box, useToast, HStack, Button } from '@chakra-ui/react';
 import ArchitectureNode from './ArchitectureNode';
 
 const nodeTypes = {
@@ -100,9 +100,15 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
         },
         data: {
           label: block.name,
+          domain: block.domain,
+          description: block.description,
           requirements: block.requirements || [],
           onUpdate: handleNodeUpdate,
         },
+        style: {
+          width: 250,
+          minHeight: block.description ? 120 : 80
+        }
       });
 
       // Process subblocks and create edges
@@ -114,6 +120,7 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
             source: blockId,
             target: subId,
             type: 'smoothstep',
+            style: { stroke: '#718096' }  // Gray color for structure edges
           });
 
           // Process subblock
@@ -133,8 +140,9 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
                 target: otherId,
                 label: reqId,
                 type: 'smoothstep',
-                style: { stroke: '#2B6CB0', strokeDasharray: '5,5' },
+                style: { stroke: '#2B6CB0', strokeDasharray: '5,5' },  // Blue color for requirement edges
                 animated: true,
+                labelStyle: { fill: '#2B6CB0', fontSize: 12 }
               });
             }
           });
@@ -178,7 +186,57 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
   );
 
   return (
-    <Box height="100%" border="1px" borderColor="gray.200" borderRadius="md">
+    <Box 
+      height="80vh" 
+      width="100%" 
+      border="1px" 
+      borderColor="gray.200" 
+      borderRadius="md"
+      display="flex"
+      flexDirection="column"
+    >
+      <HStack p={2} spacing={4} borderBottom="1px" borderColor="gray.200">
+        <Button
+          colorScheme="blue"
+          size="sm"
+          onClick={async () => {
+            try {
+              const response = await fetch('http://localhost:8000/api/architecture/generate');
+              if (!response.ok) {
+                const error = await response.json();
+                toast({
+                  title: "Failed to generate architecture",
+                  description: error.error || "Please run code analysis first",
+                  status: "error",
+                  duration: 5000,
+                  isClosable: true,
+                });
+                return;
+              }
+              const newArchitecture = await response.json();
+              onArchitectureUpdate(newArchitecture);
+              toast({
+                title: "Architecture generated",
+                description: "System architecture has been generated from code analysis",
+                status: "success",
+                duration: 3000,
+                isClosable: true,
+              });
+            } catch (error) {
+              console.error("Error generating architecture:", error);
+              toast({
+                title: "Error",
+                description: "Failed to generate architecture",
+                status: "error",
+                duration: 5000,
+                isClosable: true,
+              });
+            }
+          }}
+        >
+          Generate from Code
+        </Button>
+      </HStack>
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -188,6 +246,7 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
         onNodeDragStop={onNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
+        style={{ flex: 1 }}
       >
         <Background />
         <Controls />

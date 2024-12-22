@@ -9,9 +9,11 @@ import yaml
 import logging
 from .services.requirements_parser import RequirementsParser, Requirement
 from .services.code_analyzer import CodeAnalyzerService
+from .services.architecture import Block, load_or_create_architecture, generate_architecture_from_analysis
 from .schemas import REQUIREMENT_SCHEMA, FILE_ANALYSIS_SCHEMA, FUNCTION_INFO_SCHEMA
 from pathlib import Path
 import traceback
+from fastapi.responses import JSONResponse
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -637,6 +639,62 @@ async def generate_requirements(
         logger.error(f"Error generating requirements: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/architecture/generate")
+async def generate_architecture():
+    """Generate system architecture from latest code analysis results."""
+    try:
+        analyzer = get_code_analyzer()
+        # Get results from analysis state instead of non-existent method
+        results = analyzer.analysis_state.get('results', {})
+        if not results:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "No code analysis results available. Please run code analysis first."}
+            )
+        
+        # Convert analysis results to the expected format
+        formatted_results = {}
+        for file_path, file_info in results.items():
+            if 'functions' in file_info:
+                formatted_results[file_path] = file_info['functions']
+        
+        logger.info(f"Generating architecture from {len(formatted_results)} files")
+        
+        # Generate architecture
+        architecture = generate_architecture_from_analysis(formatted_results)
+        
+        # Convert to API response format
+        response = {
+            "blocks": {},
+            "root_id": architecture.block_id
+        }
+        
+        def add_block_to_response(block: Block):
+            response["blocks"][block.block_id] = {
+                "name": block.name,
+                "domain": block.domain,
+                "description": block.description,
+                "requirements": block.requirements,
+                "subblocks": [b.block_id for b in block.subblocks],
+                "x": block.x,
+                "y": block.y
+            }
+            for subblock in block.subblocks:
+                add_block_to_response(subblock)
+        
+        add_block_to_response(architecture)
+        logger.info(f"Generated architecture with {len(response['blocks'])} blocks")
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error generating architecture: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to generate architecture: {str(e)}"}
+        )
 
 # Add a test endpoint to verify API is accessible
 @app.get("/api/health")

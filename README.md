@@ -1,33 +1,26 @@
 # PLM Delux - Product Lifecycle Management System
 
-A modern PLM-style environment for software requirements, architecture definition, and code generation, powered by AI.
+A modern PLM-style environment for software requirements management and code analysis, powered by AI.
+
+## Current Features
 
 ### 1. Requirements Management
-- Store requirements in a machine-readable, lightweight format (Markdown with YAML front matter)
-- Group requirements by domain (UI, Motor Control, etc.)
-- AI-assisted requirement generation
+- Store requirements in a machine-readable format
+- Group requirements by domain based on source code structure
+- AI-assisted requirement generation from code analysis
 - Web-based requirement editor and viewer
-- Real-time updates and collaboration
+- Code-to-requirement traceability
 
-### 2. Architecture Definition
-- Visual architecture editor with drag-and-drop interface
-- Bi-directional linking between requirements and architecture blocks
-- Automatic diagram generation using Graphviz
-- AI-powered architecture improvement suggestions
-- Version control and change tracking
+### 2. Code Analysis
+- Automatic code analysis for requirement mapping
+- Function and domain detection
+- Caching of analysis results
+- Integration with VS Code for source navigation
 
-### 3. Code Generation
-- AI-assisted code generation from requirements
-- Automatic test case generation
-- Code stub creation with proper documentation
-- Type-safe implementations with modern best practices
-- Integration with existing codebases
-
-### 4. Visualization
-- Interactive system architecture diagrams
-- Requirement dependency graphs
-- Block relationship visualization
-- Real-time updates as architecture changes
+### 3. AI Integration
+- AI-powered requirement generation from code analysis
+- Natural language processing of code functions
+- Context-aware requirement suggestions
 
 ## Quick Start
 
@@ -36,11 +29,19 @@ A modern PLM-style environment for software requirements, architecture definitio
    ```
    OPENAI_API_KEY=your_api_key_here
    ```
-3. Start the environment:
+3. Create a `plm_settings.yaml` file in your workspace:
+   ```yaml
+   source_folder: "src"  # Root folder for source code
+   source_include_patterns:  # Files to analyze
+     - "**/*.py"
+     - "**/*.cpp"
+     - "**/*.hpp"
+   ```
+4. Start the environment:
    ```bash
    docker compose up --build
    ```
-4. Access the services:
+5. Access the services:
    - Frontend: http://localhost:5173
    - VS Code Server: http://localhost:8080
    - Backend API: http://localhost:8000
@@ -50,14 +51,30 @@ A modern PLM-style environment for software requirements, architecture definitio
 ```
 plm_delux/
 ├── work/                  # Mounted workspace directory
-│   ├── requirements/     # Project requirements
-│   ├── architecture/    # Architecture definitions
-│   └── generated/      # Generated code
+│   ├── .plm/            # PLM system cache
+│   │   └── analysis_cache/ # Code analysis results
+│   ├── requirements/    # Project requirements
+│   ├── architecture/   # Architecture definitions
+│   └── src/           # Source code
 ├── src/                  # PLM system source code
 │   ├── web/            # Web interface (frontend + backend)
-│   ├── ai_integration/ # AI integration modules
-│   └── prompts/       # AI prompt templates
+│   └── ai_integration/ # AI integration modules
 └── docker-compose.yml    # Container orchestration
+```
+
+## Configuration
+
+### PLM Settings
+Create a `plm_settings.yaml` file in your workspace with the following options:
+
+```yaml
+# Source code configuration
+source_folder: "src"  # Root folder for source code
+source_include_patterns:  # Files to analyze
+  - "**/*.py"   # Python files
+  - "**/*.cpp"  # C++ source files
+  - "**/*.hpp"  # C++ header files
+  - "**/*.h"    # C header files
 ```
 
 ## Using the System
@@ -65,32 +82,29 @@ plm_delux/
 ### Mounting Your Project
 
 1. Place your project files in the `work` directory
-2. The directory structure should be:
+2. Add your configuration in `work/plm_settings.yaml`
+3. The system will automatically create:
    ```
    work/
-   ├── requirements/     # Your project requirements
-   ├── architecture/     # Your architecture definitions
-   └── src/        # Generated code will be placed here
+   ├── .plm/            # System cache directory
+   ├── requirements/    # Generated requirements
+   └── src/            # Your source code
    ```
 
 ### Working with Requirements
 
 1. Access the web interface at http://localhost:5173
-2. Use the UI to create and manage requirements
-3. Requirements are stored as markdown files in `work/requirements/`
+2. Click "Analyze Code" to scan your source code
+3. Review and edit generated requirements
+4. Click on code references to open files in VS Code
 
-### Editing Code
+### Code Analysis
 
-1. Access VS Code Server at http://localhost:8080
-2. The entire `/work` directory is available as your workspace
-3. Click on code links in the requirements UI to open the corresponding files
-
-### Git Integration
-
-The system supports Git operations on your mounted repository:
-1. Create new branches from the UI
-2. Switch between branches
-3. All Git operations are performed on your actual repository in `/work`
+The system automatically:
+1. Analyzes your source code for functions and domains
+2. Caches analysis results in `.plm/analysis_cache/`
+3. Generates requirements based on code structure
+4. Maintains traceability between code and requirements
 
 ## Development
 
@@ -108,6 +122,25 @@ docker compose up
 
 - `OPENAI_API_KEY`: Your OpenAI API key (required for AI features)
 - `WORKSPACE_DIR`: Directory for project files (default: /work)
+
+## Planned Features
+
+The following features are planned for future releases:
+
+1. **Architecture Definition**
+   - Visual architecture editor
+   - Bi-directional requirement linking
+   - Automatic diagram generation
+
+2. **Enhanced Visualization**
+   - Interactive system diagrams
+   - Requirement dependency graphs
+   - Block relationship visualization
+
+3. **Git Integration**
+   - Branch management from UI
+   - Change tracking
+   - Version control integration
 
 ## License
 
