@@ -70,6 +70,22 @@ const CodeGenerator: React.FC<CodeGeneratorProps> = ({ requirements }) => {
     }
   };
 
+  const requirementOptions = React.useMemo(() => {
+    if (!requirements) return [];
+    return Object.entries(requirements).map(([id, req]) => ({
+      value: id,
+      label: `${id}: ${req.description}`
+    }));
+  }, [requirements]);
+
+  if (!requirements || Object.keys(requirements).length === 0) {
+    return (
+      <Box p={4} borderWidth="1px" borderRadius="lg">
+        <Text color="gray.500" textAlign="center">No requirements available for code generation</Text>
+      </Box>
+    );
+  }
+
   return (
     <Box p={4} borderWidth="1px" borderRadius="lg">
       <VStack spacing={4} align="stretch">
@@ -80,9 +96,9 @@ const CodeGenerator: React.FC<CodeGeneratorProps> = ({ requirements }) => {
           value={selectedRequirement}
           onChange={(e) => setSelectedRequirement(e.target.value)}
         >
-          {Object.entries(requirements).map(([id, req]) => (
-            <option key={id} value={id}>
-              {id}: {req.description}
+          {requirementOptions.map(({ value, label }) => (
+            <option key={value} value={value}>
+              {label}
             </option>
           ))}
         </Select>

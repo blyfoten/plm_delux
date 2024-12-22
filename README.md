@@ -2,6 +2,33 @@
 
 A modern PLM-style environment for software requirements, architecture definition, and code generation, powered by AI.
 
+### 1. Requirements Management
+- Store requirements in a machine-readable, lightweight format (Markdown with YAML front matter)
+- Group requirements by domain (UI, Motor Control, etc.)
+- AI-assisted requirement generation
+- Web-based requirement editor and viewer
+- Real-time updates and collaboration
+
+### 2. Architecture Definition
+- Visual architecture editor with drag-and-drop interface
+- Bi-directional linking between requirements and architecture blocks
+- Automatic diagram generation using Graphviz
+- AI-powered architecture improvement suggestions
+- Version control and change tracking
+
+### 3. Code Generation
+- AI-assisted code generation from requirements
+- Automatic test case generation
+- Code stub creation with proper documentation
+- Type-safe implementations with modern best practices
+- Integration with existing codebases
+
+### 4. Visualization
+- Interactive system architecture diagrams
+- Requirement dependency graphs
+- Block relationship visualization
+- Real-time updates as architecture changes
+
 ## Quick Start
 
 1. Clone this repository
@@ -11,7 +38,7 @@ A modern PLM-style environment for software requirements, architecture definitio
    ```
 3. Start the environment:
    ```bash
-   docker compose up
+   docker compose up --build
    ```
 4. Access the services:
    - Frontend: http://localhost:5173
@@ -42,8 +69,8 @@ plm_delux/
    ```
    work/
    ├── requirements/     # Your project requirements
-   ├── architecture/    # Your architecture definitions
-   └── generated/      # Generated code will be placed here
+   ├── architecture/     # Your architecture definitions
+   └── src/        # Generated code will be placed here
    ```
 
 ### Working with Requirements

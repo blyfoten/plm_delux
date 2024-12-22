@@ -42,6 +42,7 @@ interface Architecture {
 
 // Add after imports
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+console.log('Using backend URL:', BACKEND_URL);
 
 function App() {
   const [requirements, setRequirements] = useState<Record<string, Requirement>>({});
@@ -98,24 +99,114 @@ function App() {
   };
 
   const fetchRequirements = async () => {
+    console.log('Fetching requirements from:', `${BACKEND_URL}/api/requirements`);
     try {
       const response = await fetch(`${BACKEND_URL}/api/requirements`, {
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache',
+          'Origin': window.location.origin
+        },
+        mode: 'cors',
+        credentials: 'include'
+      });
+      
+      console.log('Requirements API response status:', response.status);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Requirements API error:', errorData);
+        throw new Error(errorData.error || 'Failed to fetch requirements');
+      }
+      
+      const requirementsArray = await response.json();
+      console.log('Requirements API response data:', requirementsArray);
+      
+      // Convert array to Record<string, Requirement>
+      const requirementsMap = requirementsArray.reduce((acc, req) => {
+        acc[req.id] = req;
+        return acc;
+      }, {});
+      
+      console.log('Converted requirements map:', requirementsMap);
+      setRequirements(requirementsMap);
+    } catch (error) {
+      console.error('Error in fetchRequirements:', error);
+      toast({
+        title: 'Error fetching requirements',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        status: 'error',
+        duration: 5000,
+        isClosable: true,
+      });
+    }
+  };
+
+  const handleAnalysisComplete = async () => {
+    try {
+      // First fetch the analysis results
+      const analysisResponse = await fetch(`${BACKEND_URL}/api/analyze/results`, {
         headers: {
           'Accept': 'application/json',
           'Cache-Control': 'no-cache'
         }
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to fetch requirements');
+      if (!analysisResponse.ok) {
+        throw new Error('Failed to fetch analysis results');
       }
       
-      const data = await response.json();
-      setRequirements(data.requirements);
+      const analysisData = await analysisResponse.json();
+      
+      // For each analyzed file, create a requirement
+      for (const [filePath, fileAnalysis] of Object.entries(analysisData)) {
+        const domain = fileAnalysis.domain || 'Uncategorized';
+        const reqId = `RQ-${filePath.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        
+        // Create a new requirement from the analysis
+        const newRequirement = {
+          id: reqId,
+          domain: domain,
+          description: fileAnalysis.purpose || 'No description available',
+          linked_blocks: [],
+          additional_notes: [
+            ...(fileAnalysis.key_functionality || []),
+            ...(fileAnalysis.implementation_details || [])
+          ],
+          implementation_files: [filePath],
+          code_references: fileAnalysis.functions.map(fn => ({
+            file: filePath,
+            line: fn.line_number,
+            function: fn.name,
+            type: 'function',
+            url: `#${filePath}:${fn.line_number}`
+          }))
+        };
+        
+        // Create the requirement via the requirements API
+        await fetch(`${BACKEND_URL}/api/requirements`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify(newRequirement)
+        });
+      }
+      
+      // Refresh the requirements list
+      fetchRequirements();
+      
+      toast({
+        title: 'Analysis Complete',
+        description: 'Requirements have been generated from analysis results',
+        status: 'success',
+        duration: 5000,
+        isClosable: true,
+      });
     } catch (error) {
       toast({
-        title: 'Error fetching requirements',
+        title: 'Error processing analysis results',
         description: error instanceof Error ? error.message : 'Unknown error',
         status: 'error',
         duration: 5000,
@@ -244,7 +335,7 @@ function App() {
                     </ReactFlowProvider>
                   </TabPanel>
                   <TabPanel p={0}>
-                    <CodeAnalyzer onAnalysisComplete={fetchRequirements} />
+                    <CodeAnalyzer onAnalysisComplete={handleAnalysisComplete} />
                   </TabPanel>
                 </TabPanels>
               </Tabs>

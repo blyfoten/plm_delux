@@ -1,979 +1,646 @@
-"""FastAPI backend for the PLM web interface."""
+"""API endpoints for the PLM system."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import asyncio
-import os
-import frontmatter
-import sys
-import logging
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field
+import jsonschema
 import yaml
+import logging
+from .services.requirements_parser import RequirementsParser, Requirement
+from .services.code_analyzer import CodeAnalyzerService
+from .schemas import REQUIREMENT_SCHEMA, FILE_ANALYSIS_SCHEMA, FUNCTION_INFO_SCHEMA
 from pathlib import Path
-from datetime import datetime
-import json
 import traceback
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
 
 # Configure logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('plm_debug.log')
-    ]
-)
 logger = logging.getLogger(__name__)
 
-# Add the src directory to the Python path
-src_path = str(Path(__file__).parent.parent.parent)
-if src_path not in sys.path:
-    sys.path.append(src_path)
+app = FastAPI(title="PLM API", version="1.0.0")
 
-# Import services
-from .services import CodeAnalyzerService, FileAnalysis, AnalysisProgress, OpenAIService, MockAIService, GeneratedRequirement
-from .services.requirements_parser import RequirementsParser, Requirement
-from .services.architecture import Block, system_architecture, save_architecture
-from .services.visualizer import ArchitectureVisualizer
-from .services.requirements_mapper import RequirementsMapper, CodeReference
-
-# Get workspace directory from environment or use default
-WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/work")
-
-# Add after other global variables
-ANALYSIS_CACHE_DIR = Path(WORKSPACE_DIR) / ".plm" / "analysis_cache"
-ANALYSIS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-def save_analysis_results():
-    """Save current analysis results to disk."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    cache_file = ANALYSIS_CACHE_DIR / f"analysis_results_{timestamp}.json"
-    
-    # Convert analysis results to serializable format
-    serializable_results = {
-        file_path: {
-            "file_path": analysis.file_path,
-            "language": analysis.language,
-            "purpose": analysis.purpose,
-            "key_functionality": analysis.key_functionality,
-            "dependencies": analysis.dependencies,
-            "interfaces": analysis.interfaces,
-            "implementation_details": analysis.implementation_details,
-            "potential_issues": analysis.potential_issues,
-            "domain": analysis.domain
-        }
-        for file_path, analysis in analysis_results.items()
-    }
-    
-    with open(cache_file, 'w') as f:
-        json.dump(serializable_results, f, indent=2)
-    logger.info(f"Saved analysis results to {cache_file}")
-    return cache_file
-
-def load_latest_analysis():
-    """Load the most recent analysis results from disk."""
-    try:
-        cache_files = sorted(ANALYSIS_CACHE_DIR.glob("analysis_results_*.json"))
-        if not cache_files:
-            return None
-            
-        latest_file = cache_files[-1]
-        with open(latest_file) as f:
-            data = json.load(f)
-            
-        # Convert back to FileAnalysis objects
-        return {
-            file_path: FileAnalysis(**analysis_data)
-            for file_path, analysis_data in data.items()
-        }
-    except Exception as e:
-        logger.error(f"Error loading analysis cache: {e}")
-        return None
-
-# Pydantic models for API
-class CodeReferenceModel(BaseModel):
-    """Model for code references."""
-    file: str
-    line: int
-    function: str
-    type: str
-    url: str
-
-class RequirementBase(BaseModel):
-    """Base model for requirements."""
-    id: str
-    domain: str
-    description: str
-    linked_blocks: List[str]
-    additional_notes: List[str]
-    content: str
-    code_references: List[CodeReferenceModel] = []
-
-    class Config:
-        """Pydantic config."""
-        from_attributes = True
-
-class ArchitectureBlock(BaseModel):
-    """Architecture block data model."""
-    block_id: str
-    name: str
-    requirements: List[str] = []
-    subblocks: List[str] = []
-    x: float = 0
-    y: float = 0
-
-class ArchitectureUpdateRequest(BaseModel):
-    """Request model for architecture updates."""
-    blocks: Dict[str, ArchitectureBlock]
-
-class CodeGenerationRequest(BaseModel):
-    """Request model for code generation."""
-    requirement_id: str
-
-class CodeGenerationResponse(BaseModel):
-    """Response model for code generation."""
-    message: str
-    files: List[str]
-
-class ArchitectureResponse(BaseModel):
-    """Response model for architecture endpoint."""
-    root_id: str
-    blocks: Dict[str, ArchitectureBlock]
-
-class DomainConfig(BaseModel):
-    """Configuration for a domain."""
-    name: str
-    description: str = ""
-    parent_domain: Optional[str] = None
-    subdomain_ids: List[str] = []
-
-    def model_dump(self, *args, **kwargs):
-        """Override model_dump to ensure proper serialization."""
-        data = super().model_dump(*args, **kwargs)
-        # Ensure subdomain_ids is always a list
-        data['subdomain_ids'] = data.get('subdomain_ids', [])
-        return data
-
-class PLMSettings(BaseModel):
-    """Settings model for PLM."""
-    source_folder: str = "src"  # Used for both input (code analysis) and output (generated code)
-    requirements_folder: str = "requirements"
-    architecture_folder: str = "architecture"
-    folder_structure: str = "hierarchical"  # or "flat"
-    preferred_languages: List[str] = ["python", "javascript"]
-    custom_llm_instructions: str = ""
-    source_include_patterns: List[str] = ["**/*.py", "**/*.js", "**/*.ts"]
-    source_exclude_patterns: List[str] = ["**/node_modules/**", "**/__pycache__/**", "**/venv/**"]
-    domains: Dict[str, DomainConfig] = {
-        "ui": DomainConfig(
-            name="User Interface",
-            description="User interface components and interactions",
-            subdomain_ids=[]
-        ),
-        "motor_and_doors": DomainConfig(
-            name="Motor and Doors",
-            description="Motor control and door management systems",
-            subdomain_ids=[]
-        ),
-        "offboard": DomainConfig(
-            name="Offboard Systems",
-            description="External and cloud-based systems",
-            subdomain_ids=[]
-        )
-    }
-
-    class Config:
-        """Pydantic config."""
-        from_attributes = True
-        populate_by_name = True
-
-    @classmethod
-    def get_default_settings(cls) -> "PLMSettings":
-        """Get default settings."""
-        return cls()
-
-    def model_dump(self, *args, **kwargs):
-        """Override model_dump to ensure proper serialization."""
-        data = super().model_dump(*args, **kwargs)
-        # Ensure domains are properly serialized with empty lists
-        data['domains'] = {
-            domain_id: {
-                'name': domain.name,
-                'description': domain.description,
-                'parent_domain': domain.parent_domain,
-                'subdomain_ids': domain.subdomain_ids or []  # Ensure empty list instead of None
-            }
-            for domain_id, domain in self.domains.items()
-        }
-        return data
-
-def load_settings() -> PLMSettings:
-    """Load settings from file or create default."""
-    settings_path = Path(WORKSPACE_DIR) / "plm_settings.yaml"
-    if settings_path.exists():
-        with open(settings_path, "r") as f:
-            return PLMSettings(**yaml.safe_load(f))
-    return PLMSettings.get_default_settings()
-
-def save_settings(settings: PLMSettings):
-    """Save settings to YAML file with comments."""
-    settings_path = Path(WORKSPACE_DIR) / "plm_settings.yaml"
-    
-    # Create settings dict with comments
-    settings_dict = settings.model_dump()
-    
-    # Add comments to the YAML output
-    yaml_str = """# PLM Settings Configuration
-# Folder paths relative to workspace
-source_folder: {source_folder}  # Used for both input (code analysis) and output (generated code)
-requirements_folder: {requirements_folder}
-architecture_folder: {architecture_folder}
-
-# Folder structure preference (hierarchical or flat)
-folder_structure: {folder_structure}
-
-# Preferred programming languages for code generation
-preferred_languages:
-{languages}
-
-# Custom instructions for LLM interactions
-custom_llm_instructions: "{custom_llm_instructions}"
-
-# Source code scanning patterns
-source_include_patterns:
-{includes}
-
-# Patterns to exclude from source scanning
-source_exclude_patterns:
-{excludes}
-
-# Domain configurations
-domains:
-{domains}""".format(
-        source_folder=settings_dict["source_folder"],
-        requirements_folder=settings_dict["requirements_folder"],
-        architecture_folder=settings_dict["architecture_folder"],
-        folder_structure=settings_dict["folder_structure"],
-        languages="\n".join(f"  - {lang}" for lang in settings_dict["preferred_languages"]),
-        custom_llm_instructions=settings_dict["custom_llm_instructions"],
-        includes="\n".join(f'  - "{pattern}"' for pattern in settings_dict["source_include_patterns"]),
-        excludes="\n".join(f'  - "{pattern}"' for pattern in settings_dict["source_exclude_patterns"]),
-        domains="\n".join(
-            f"  {domain_id}:\n" +
-            f"    name: {domain_data['name']}\n" +
-            f"    description: {domain_data['description']}\n" +
-            (f"    parent_domain: {domain_data['parent_domain']}\n" if domain_data.get('parent_domain') else "") +
-            f"    subdomain_ids: {domain_data.get('subdomain_ids', [])}"
-            for domain_id, domain_data in settings_dict["domains"].items()
-        )
-    )
-    
-    with open(settings_path, "w") as f:
-        f.write(yaml_str)
-
-# Initialize components with settings
-settings = load_settings()
-WORKSPACE_DIR = os.getenv("WORKSPACE_DIR", "/work")
-
-parser = RequirementsParser(WORKSPACE_DIR)
-mapper = RequirementsMapper(WORKSPACE_DIR)
-
-# Use MockAIService if no API key is available
-api_key = os.getenv("OPENAI_API_KEY")
-ai = OpenAIService(api_key) if api_key else MockAIService()
-
-visualizer = ArchitectureVisualizer(parser.parse_all())
-
-# Initialize services
-code_analyzer = CodeAnalyzerService(WORKSPACE_DIR)
-analysis_results: Dict[str, FileAnalysis] = {}
-
-def convert_architecture_to_dict(block: Block) -> dict:
-    """Convert architecture block to dictionary for API response."""
-    blocks = {}
-    
-    def process_block(b: Block):
-        blocks[b.block_id] = {
-            "block_id": b.block_id,
-            "name": b.name,
-            "requirements": b.requirements,
-            "subblocks": [sb.block_id for sb in b.subblocks],
-            "x": getattr(b, 'x', 0),
-            "y": getattr(b, 'y', 0)
-        }
-        for subblock in b.subblocks:
-            process_block(subblock)
-    
-    process_block(block)
-    
-    return {
-        "root_id": block.block_id,
-        "blocks": blocks
-    }
-
-app = FastAPI(title="PLM Web Interface")
-
-# Enable CORS
+# Update CORS middleware configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600
 )
 
-@app.get("/api/requirements")
-async def get_requirements():
-    """Get all requirements with their code references."""
-    logger.info("Fetching requirements")
-    try:
-        requirements = parser.parse_all()
-        logger.debug(f"Raw requirements: {requirements}")
-        
-        # Scan code for requirement references
-        mapper.scan_code_for_references()
-        
-        # Convert requirements to a dictionary format the frontend expects
-        response = {}
-        for req_id, req in requirements.items():
-            code_refs = mapper.get_references(req_id)
-            logger.info(f"Found {len(code_refs)} code references for {req_id}")
-            
-            code_ref_models = []
-            for ref in code_refs:
-                url = mapper.get_vscode_url(ref)
-                logger.info(f"Generated URL for {req_id}: {url}")
-                code_ref_models.append({
-                    "file": ref.file,
-                    "line": ref.line,
-                    "function": ref.function,
-                    "type": ref.type,
-                    "url": url
-                })
-            
-            response[req_id] = {
-                "id": req.id,
-                "domain": req.domain,
-                "description": req.description,
-                "linked_blocks": req.linked_blocks,
-                "additional_notes": req.additional_notes,
-                "content": req.content,
-                "code_references": code_ref_models
-            }
-        
-        logger.debug(f"Sending response: {response}")
-        return {"requirements": response}
-    except Exception as e:
-        logger.error(f"Error fetching requirements: {str(e)}")
-        logger.exception("Detailed traceback:")
-        raise HTTPException(status_code=500, detail=str(e))
+class DomainInfo(BaseModel):
+    """Model for domain information."""
+    name: str
+    description: str
+    subdomain_ids: List[str]
 
-@app.get("/api/architecture", response_model=ArchitectureResponse)
-async def get_architecture():
-    """Get system architecture."""
-    logger.info("Fetching architecture")
-    try:
-        arch_dict = convert_architecture_to_dict(system_architecture)
-        return ArchitectureResponse(**arch_dict)
-    except Exception as e:
-        logger.error(f"Error fetching architecture: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Settings model
+class Settings(BaseModel):
+    """Model for PLM settings."""
+    source_folder: str = "src"
+    requirements_folder: str = "requirements"
+    architecture_folder: str = "architecture"
+    folder_structure: str = "hierarchical"
+    preferred_languages: List[str] = ["python", "javascript", "cpp"]
+    custom_llm_instructions: str = ""
+    source_include_patterns: List[str] = [
+        "**/*.py", "**/*.js", "**/*.ts",  # Web languages
+        "**/*.cpp", "**/*.hpp", "**/*.h"  # C/C++
+    ]
+    source_exclude_patterns: List[str] = [
+        "**/node_modules/**", "**/__pycache__/**", "**/venv/**",
+        "**/build/**", "**/dist/**"
+    ]
+    domains: Dict[str, DomainInfo] = {}
 
-@app.put("/api/architecture")
-async def update_architecture(request: ArchitectureUpdateRequest):
-    """Update the architecture based on visual editor changes."""
-    logger.info("Updating architecture")
-    try:
-        # Update the architecture
-        for block_id, block_data in request.blocks.items():
-            # Update block properties
-            if block_id in system_architecture.blocks:
-                block = system_architecture.blocks[block_id]
-                block.name = block_data.name
-                block.requirements = block_data.requirements
-                block.x = block_data.x
-                block.y = block_data.y
-        
-        # Save the updated architecture
-        save_architecture(system_architecture, WORKSPACE_DIR)
-        
-        # Regenerate visualization
-        requirements = parser.parse_all()
-        visualizer = ArchitectureVisualizer(requirements)
-        visualizer.generate_diagram(system_architecture, str(Path(WORKSPACE_DIR) / "architecture" / "diagram"))
-        
-        return {"message": "Architecture updated successfully"}
-    except Exception as e:
-        logger.error(f"Error updating architecture: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+class RequirementCreate(BaseModel):
+    """Model for creating a requirement."""
+    id: str = Field(..., pattern="^RQ-[A-Z_]+-\\d+$")
+    domain: str
+    description: str
+    linked_blocks: List[str] = Field(default_factory=list)
+    additional_notes: List[str] = Field(default_factory=list)
+    implementation_files: List[str] = Field(default_factory=list)
 
-@app.post("/api/code/generate", response_model=CodeGenerationResponse)
-async def generate_code(request: CodeGenerationRequest):
-    """Generate code for a requirement."""
-    logger.info(f"Generating code for requirement: {request.requirement_id}")
-    
-    try:
-        requirements = parser.parse_all()
-        logger.debug(f"All requirements: {list(requirements.keys())}")
-        
-        if request.requirement_id not in requirements:
-            logger.error(f"Requirement not found: {request.requirement_id}")
-            raise HTTPException(status_code=404, detail=f"Requirement {request.requirement_id} not found")
-        
-        requirement = requirements[request.requirement_id]
-        logger.info(f"Found requirement: {requirement.description}")
-        logger.debug(f"Requirement object type: {type(requirement)}")
-        logger.debug(f"Requirement attributes: {vars(requirement)}")
-        
-        # Convert Requirement to Pydantic model
-        requirement_model = RequirementBase(
-            id=requirement.id,
-            domain=requirement.domain,
-            description=requirement.description,
-            linked_blocks=requirement.linked_blocks,
-            additional_notes=requirement.additional_notes,
-            content=requirement.content
-        )
-        logger.debug(f"Created Pydantic model: {requirement_model.model_dump()}")
-        
-        # Convert to dict for AI service
-        requirement_dict = requirement_model.model_dump()
-        logger.debug(f"Converted to dict for AI service: {requirement_dict}")
-        
-        # Load current settings
-        current_settings = load_settings()
-        
-        # Log the exact structure being passed to generate_code
-        logger.info(f"Calling ai.generate_code with dict: {requirement_dict}")
-        generated = await ai.generate_code(requirement_dict)
-        logger.info(f"Generated code for block: {generated.block_id}")
-        
-        # Add tests
-        generated = await ai.enhance_code_with_tests(generated)
-        logger.info("Added tests to generated code")
-        
-        # Save the generated code to the source folder
-        output_dir = Path(WORKSPACE_DIR) / current_settings.source_folder / generated.block_id.lower()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        impl_file = output_dir / "implementation.py"
-        with open(impl_file, "w") as f:
-            f.write(generated.code)
-        logger.info(f"Saved generated code to: {impl_file}")
-        
-        if generated.tests:
-            test_file = output_dir / "test_implementation.py"
-            with open(test_file, "w") as f:
-                f.write(generated.tests)
-            logger.info(f"Saved tests to: {test_file}")
-        
-        # Update requirement mappings
-        mapper.scan_code_for_references()
-        
-        return CodeGenerationResponse(
-            message="Code generated successfully",
-            files=[str(impl_file)]
-        )
-    except Exception as e:
-        logger.error(f"Error generating code: {str(e)}")
-        logger.exception("Detailed traceback:")
-        raise HTTPException(status_code=500, detail=str(e)) 
+class RequirementResponse(BaseModel):
+    """Model for requirement response."""
+    id: str
+    domain: str
+    description: str
+    linked_blocks: List[str]
+    additional_notes: List[str]
+    implementation_files: List[str]
+    code_references: List[Dict] = Field(default_factory=list)
 
-@app.get("/api/settings")
-async def get_settings():
-    """Get current PLM settings."""
-    logger.info("Fetching settings")
-    try:
-        settings = load_settings()
-        # Convert to dict and return as JSONResponse
-        return JSONResponse(
-            content=jsonable_encoder(settings.model_dump()),
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache"
-            }
-        )
-    except Exception as e:
-        logger.error(f"Error fetching settings: {str(e)}")
-        logger.exception("Detailed traceback:")
-        return JSONResponse(
-            content={"error": str(e)},
-            status_code=500,
-            headers={"Content-Type": "application/json"}
-        )
-
-@app.put("/api/settings")
-async def update_settings(new_settings: PLMSettings):
-    """Update PLM settings."""
-    logger.info("Updating settings")
-    try:
-        logger.debug(f"Received settings data: {new_settings.model_dump()}")
-        logger.debug(f"Domains data: {new_settings.domains}")
-        save_settings(new_settings)
-        return JSONResponse(
-            content={"message": "Settings updated successfully"},
-            headers={"Content-Type": "application/json"}
-        )
-    except Exception as e:
-        logger.error(f"Error updating settings: {str(e)}")
-        logger.error(f"Settings data that caused error: {vars(new_settings)}")
-        return JSONResponse(
-            content={"error": str(e)},
-            status_code=500,
-            headers={"Content-Type": "application/json"}
-        )
-
-class FileAnalysisModel(BaseModel):
-    """API model for file analysis results."""
-    file_path: str
-    language: str
+class FileAnalysisResponse(BaseModel):
+    """Model for file analysis response."""
     purpose: str
     key_functionality: List[str]
     dependencies: List[str]
-    interfaces: List[str]
     implementation_details: List[str]
     potential_issues: List[str]
-    domain: Optional[str] = None
+    functions: List[Dict] = Field(default_factory=list)
 
-class AnalysisProgressModel(BaseModel):
-    """API model for analysis progress."""
-    total_files: int
-    analyzed_files: int
-    current_file: Optional[str] = None
-    status: str
-    error_message: Optional[str] = None
+class ArchitectureNode(BaseModel):
+    """Model for architecture diagram node."""
+    id: str
+    label: str
+    type: str = "default"
+    data: Dict = Field(default_factory=dict)
 
-class GenerateRequirementsRequest(BaseModel):
-    """Request model for requirements generation."""
-    domain: str
+class ArchitectureEdge(BaseModel):
+    """Model for architecture diagram edge."""
+    id: str
+    source: str
+    target: str
+    label: str = ""
+    type: str = "default"
 
-class AnalyzeRequest(BaseModel):
-    """Request model for code analysis."""
+class ArchitectureResponse(BaseModel):
+    """Model for architecture diagram response."""
+    nodes: List[ArchitectureNode] = Field(default_factory=list)
+    edges: List[ArchitectureEdge] = Field(default_factory=list)
+
+class DomainRecommendation(BaseModel):
+    """Model for domain recommendation."""
+    domain_id: str
+    name: str
+    description: str
+    subdomain_ids: List[str]
+    confidence: float
+    matching_files: List[str]
+    reasons: List[str]
+    reasoning: str
+
+class DomainRecommendationsResponse(BaseModel):
+    """Model for domain recommendations response."""
+    recommendations: List[DomainRecommendation]
+    changes_detected: bool = Field(default=False)
+
+class AnalysisStartRequest(BaseModel):
+    """Model for starting code analysis."""
     files: Optional[List[str]] = None  # If None, analyze all files
 
-@app.post("/api/analyze/start")
-async def start_analysis(request: AnalyzeRequest):
-    """Start analyzing the codebase."""
-    logger.info("=== START ANALYSIS ENDPOINT CALLED ===")
-    logger.debug(f"Request: {request}")
-    logger.debug(f"Workspace dir: {WORKSPACE_DIR}")
-    logger.debug(f"Current settings: {load_settings()}")
-    
-    try:
-        logger.info("Starting code analysis")
-        analysis_results.clear()
-        
-        # If specific files are provided, only analyze those
-        if request.files:
-            logger.info(f"Starting analysis of {len(request.files)} selected files")
-            for file_path in request.files:
-                full_path = os.path.join(WORKSPACE_DIR, file_path)
-                logger.debug(f"Analyzing file: {full_path}")
-                analysis = await code_analyzer.analyze_file(full_path)
-                if analysis:
-                    analysis_results[analysis.file_path] = analysis
-                    logger.debug(f"Analysis completed for {full_path}")
-            
-            # Save results for specific file analysis
-            cache_file = save_analysis_results()
-            logger.info(f"Analysis results saved to {cache_file}")
-            response_data = {
-                "message": "Analysis completed successfully",
-                "status": "completed",
-                "cache_file": str(cache_file),
-                "files_analyzed": len(analysis_results)
-            }
-            return JSONResponse(content=jsonable_encoder(response_data))
-        else:
-            # Analyze all files
-            logger.info("Starting analysis of entire codebase")
-            
-            # Create a background task for the analysis
-            async def run_analysis():
-                try:
-                    logger.info("Background analysis task started")
-                    async for analysis in code_analyzer.analyze_codebase():
-                        if analysis:
-                            logger.debug(f"Received analysis for {analysis.file_path}")
-                            analysis_results[analysis.file_path] = analysis
-                    logger.info("Background analysis task completed successfully")
-                    # Save the analysis results to cache
-                    cache_file = save_analysis_results()
-                    logger.info(f"Analysis results saved to cache: {cache_file}")
-                except Exception as e:
-                    logger.error(f"Error in background analysis task: {e}")
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                    raise
-            
-            # Start the background task
-            task = asyncio.create_task(run_analysis())
-            logger.info(f"Created background task: {task}")
-            
-            response_data = {
-                "message": "Analysis started successfully",
-                "status": "running",
-                "task_id": str(id(task))
-            }
-            return JSONResponse(
-                content=jsonable_encoder(response_data),
-                headers={
-                    "Content-Type": "application/json",
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
-            
-    except Exception as e:
-        logger.error(f"Error starting analysis: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        response_data = {
-            "message": f"Error starting analysis: {str(e)}",
-            "status": "error",
-            "error": str(e)
-        }
-        return JSONResponse(
-            content=jsonable_encoder(response_data),
-            status_code=500,
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
+class AnalysisStartResponse(BaseModel):
+    """Model for analysis start response."""
+    status: str = "started"
+    message: str
+    total_files: int
 
-@app.get("/api/analyze/progress", response_model=AnalysisProgressModel)
-async def get_analysis_progress():
-    """Get the current progress of code analysis."""
+class AnalysisProgressResponse(BaseModel):
+    """Model for analysis progress response."""
+    status: str
+    progress: float
+    current_file: Optional[str] = None
+    total_files: int
+    completed_files: int
+    message: str
+
+def get_requirements_parser():
+    """Dependency injection for requirements parser."""
+    return RequirementsParser()
+
+def get_code_analyzer():
+    """Dependency injection for code analyzer."""
+    if not hasattr(get_code_analyzer, '_instance'):
+        get_code_analyzer._instance = CodeAnalyzerService()
+    return get_code_analyzer._instance
+
+@app.get("/api/settings", response_model=Settings)
+async def get_settings(analyzer: CodeAnalyzerService = Depends(get_code_analyzer)):
+    """Get PLM settings."""
     try:
-        logger.debug("Getting analysis progress")
-        progress = await code_analyzer.get_analysis_progress()
-        logger.debug(f"Current progress: {vars(progress)}")
-        
-        # Create the response model
-        response = AnalysisProgressModel(
-            total_files=progress.total_files,
-            analyzed_files=progress.analyzed_files,
-            current_file=progress.current_file,
-            status=progress.status,
-            error_message=progress.error_message
-        )
-        
-        logger.debug(f"Progress response: {vars(response)}")
-        
-        # Add headers to prevent caching
-        headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0"
-        }
-        
-        return JSONResponse(
-            content=jsonable_encoder(response),
-            headers=headers
-        )
+        return Settings(**analyzer.settings)
     except Exception as e:
-        logger.error(f"Error getting analysis progress: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/settings", response_model=Settings)
+async def update_settings(
+    settings: Settings,
+    analyzer: CodeAnalyzerService = Depends(get_code_analyzer)
+):
+    """Update PLM settings."""
+    try:
+        # Update settings file
+        with open(analyzer.settings_path, "w") as f:
+            settings_dict = settings.dict()
+            yaml.safe_dump(settings_dict, f)
+        
+        # Reload settings in analyzer
+        analyzer.settings = settings_dict
+        return settings
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/requirements", response_model=List[RequirementResponse])
+async def list_requirements(parser: RequirementsParser = Depends(get_requirements_parser)):
+    """List all requirements."""
+    logger.info("GET /api/requirements - Fetching all requirements")
+    try:
+        requirements = parser.parse_all()
+        logger.info(f"Found {len(requirements)} requirements")
+        logger.debug(f"Requirements: {requirements}")
+        response_data = [RequirementResponse(**req.to_dict()) for req in requirements.values()]
+        logger.info(f"Returning {len(response_data)} requirements")
+        return response_data
+    except Exception as e:
+        logger.error(f"Error fetching requirements: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        # Return a valid response even in case of error
-        return JSONResponse(
-            content=jsonable_encoder(AnalysisProgressModel(
-                total_files=0,
-                analyzed_files=0,
-                status="error",
-                error_message=str(e)
-            )),
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/requirements/{req_id}", response_model=RequirementResponse)
+async def get_requirement(
+    req_id: str,
+    parser: RequirementsParser = Depends(get_requirements_parser)
+):
+    """Get a specific requirement by ID."""
+    logger.info(f"GET /api/requirements/{req_id} - Fetching requirement")
+    try:
+        requirements = parser.parse_all()
+        logger.debug(f"All requirements: {requirements}")
+        if req_id not in requirements:
+            logger.warning(f"Requirement {req_id} not found")
+            raise HTTPException(status_code=404, detail=f"Requirement {req_id} not found")
+        response_data = RequirementResponse(**requirements[req_id].to_dict())
+        logger.info(f"Returning requirement {req_id}")
+        return response_data
+    except Exception as e:
+        logger.error(f"Error fetching requirement {req_id}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/requirements", response_model=RequirementResponse)
+async def create_requirement(
+    req: RequirementCreate,
+    parser: RequirementsParser = Depends(get_requirements_parser)
+):
+    """Create a new requirement."""
+    logger.info(f"POST /api/requirements - Creating requirement {req.id}")
+    try:
+        # Convert to dict for validation
+        req_dict = req.dict()
+        logger.debug(f"Requirement data: {req_dict}")
+        jsonschema.validate(instance=req_dict, schema=REQUIREMENT_SCHEMA)
+        
+        # Create requirement
+        requirement = Requirement(**req_dict)
+        parser.save_requirement(requirement)
+        logger.info(f"Successfully created requirement {req.id}")
+        return RequirementResponse(**requirement.to_dict())
+    except jsonschema.exceptions.ValidationError as e:
+        logger.error(f"Validation error for requirement {req.id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating requirement {req.id}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/requirements/{req_id}", response_model=RequirementResponse)
+async def update_requirement(
+    req_id: str,
+    req: RequirementCreate,
+    parser: RequirementsParser = Depends(get_requirements_parser)
+):
+    """Update an existing requirement."""
+    try:
+        requirements = parser.parse_all()
+        if req_id not in requirements:
+            raise HTTPException(status_code=404, detail=f"Requirement {req_id} not found")
+        
+        # Validate and update
+        req_dict = req.dict()
+        jsonschema.validate(instance=req_dict, schema=REQUIREMENT_SCHEMA)
+        
+        requirement = Requirement(**req_dict)
+        parser.save_requirement(requirement)
+        return RequirementResponse(**requirement.to_dict())
+    except jsonschema.exceptions.ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/requirements/{req_id}")
+async def delete_requirement(
+    req_id: str,
+    parser: RequirementsParser = Depends(get_requirements_parser)
+):
+    """Delete a requirement."""
+    try:
+        requirements = parser.parse_all()
+        if req_id not in requirements:
+            raise HTTPException(status_code=404, detail=f"Requirement {req_id} not found")
+        
+        # Get the file path
+        requirement = requirements[req_id]
+        domain_path = requirement.domain.split('/')
+        req_file = parser.requirements_dir.joinpath(*domain_path, f"{req_id.lower()}.yaml")
+        
+        # Delete the file
+        if req_file.exists():
+            req_file.unlink()
+            return {"message": f"Requirement {req_id} deleted"}
+        else:
+            raise HTTPException(status_code=404, detail=f"Requirement file not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analyze/file/{file_path:path}", response_model=FileAnalysisResponse)
+async def analyze_file(
+    file_path: str,
+    analyzer: CodeAnalyzerService = Depends(get_code_analyzer)
+):
+    """Analyze a specific file."""
+    try:
+        analysis = analyzer.analyze_file(file_path)
+        
+        # Validate analysis results
+        jsonschema.validate(instance=analysis, schema=FILE_ANALYSIS_SCHEMA)
+        
+        # Validate function info if present
+        if "functions" in analysis:
+            for func in analysis["functions"]:
+                jsonschema.validate(instance=func, schema=FUNCTION_INFO_SCHEMA)
+        
+        return FileAnalysisResponse(**analysis)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"File {file_path} not found")
+    except jsonschema.exceptions.ValidationError as e:
+        raise HTTPException(status_code=500, detail=f"Invalid analysis result: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/analyze/results")
-async def get_analysis_results():
-    """Get the results of the code analysis."""
+async def get_analysis_results(analyzer: CodeAnalyzerService = Depends(get_code_analyzer)):
+    """Get cached analysis results."""
     try:
-        logger.debug("Getting analysis results")
-        if not analysis_results:
-            logger.debug("No current results, attempting to load from cache")
-            cached = load_latest_analysis()
-            if cached:
-                logger.info(f"Loaded {len(cached)} results from cache")
-                analysis_results.update(cached)
-            else:
-                logger.warning("No cached results found")
-                return JSONResponse(
-                    content=jsonable_encoder({
-                        "results": {},
-                        "status": "no_results"
-                    }),
-                    headers={
-                        "Content-Type": "application/json",
-                        "Cache-Control": "no-cache, no-store, must-revalidate",
-                        "Pragma": "no-cache",
-                        "Expires": "0"
-                    }
-                )
-
-        # Convert to serializable format
-        results = {}
-        for file_path, analysis in analysis_results.items():
-            try:
-                results[file_path] = {
-                    "file_path": analysis.file_path,
-                    "language": analysis.language,
-                    "purpose": analysis.purpose,
-                    "key_functionality": analysis.key_functionality,
-                    "dependencies": analysis.dependencies,
-                    "interfaces": analysis.interfaces,
-                    "implementation_details": analysis.implementation_details,
-                    "potential_issues": analysis.potential_issues,
-                    "domain": analysis.domain
-                }
-            except Exception as e:
-                logger.error(f"Error converting analysis for {file_path}: {e}")
-                continue
-
-        logger.debug(f"Returning {len(results)} analysis results")
-        return JSONResponse(
-            content=jsonable_encoder({
-                "results": results,
-                "status": "success"
-            }),
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
+        results = analyzer.analysis_state.get('results', {})
+        if not results:
+            # Try to load from cache if no results in memory
+            analyzer._load_cached_results()
+            results = analyzer.analysis_state.get('results', {})
+            
+        return results
     except Exception as e:
         logger.error(f"Error getting analysis results: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
-        return JSONResponse(
-            content=jsonable_encoder({
-                "results": {},
-                "status": "error",
-                "error": str(e)
-            }),
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/analyze/file/{file_path:path}")
-async def analyze_single_file(file_path: str):
-    """Analyze a single file."""
+@app.get("/api/architecture", response_model=ArchitectureResponse)
+async def get_architecture(analyzer: CodeAnalyzerService = Depends(get_code_analyzer)):
+    """Get architecture diagram data."""
     try:
-        analysis = await code_analyzer.analyze_file(os.path.join(WORKSPACE_DIR, file_path))
-        if not analysis:
-            raise HTTPException(status_code=404, detail="File not found or cannot be analyzed")
+        # Create nodes for each domain
+        nodes = []
+        edges = []
+        
+        for domain_id, domain_info in analyzer.settings.get('domains', {}).items():
+            # Add domain node
+            nodes.append(ArchitectureNode(
+                id=domain_id,
+                label=domain_info.get('name', domain_id),
+                type="domain",
+                data={
+                    "description": domain_info.get('description', ''),
+                    "type": "domain"
+                }
+            ))
             
-        return FileAnalysisModel(
-            file_path=analysis.file_path,
-            language=analysis.language,
-            purpose=analysis.purpose,
-            key_functionality=analysis.key_functionality,
-            dependencies=analysis.dependencies,
-            interfaces=analysis.interfaces,
-            implementation_details=analysis.implementation_details,
-            potential_issues=analysis.potential_issues,
-            domain=analysis.domain
+            # Add subdomain nodes and edges
+            for subdomain_id in domain_info.get('subdomain_ids', []):
+                node_id = f"{domain_id}_{subdomain_id}"
+                nodes.append(ArchitectureNode(
+                    id=node_id,
+                    label=subdomain_id,
+                    type="subdomain",
+                    data={
+                        "parent": domain_id,
+                        "type": "subdomain"
+                    }
+                ))
+                edges.append(ArchitectureEdge(
+                    id=f"edge_{domain_id}_{subdomain_id}",
+                    source=domain_id,
+                    target=node_id,
+                    type="contains"
+                ))
+        
+        return ArchitectureResponse(nodes=nodes, edges=edges)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze/recommend-domains", response_model=DomainRecommendationsResponse)
+async def recommend_domains(analyzer: CodeAnalyzerService = Depends(get_code_analyzer)):
+    """Recommend domains based on code analysis."""
+    try:
+        recommendations = []
+        domains = analyzer.settings.get('domains', {})
+        
+        # For each domain, check if there are files that match its description
+        for domain_id, domain_info in domains.items():
+            # Get domain keywords from description
+            description = domain_info.get('description', '').lower()
+            name = domain_info.get('name', '').lower()
+            
+            # Find matching files
+            matching_files = []
+            confidence = 0.0
+            reasons = []
+            
+            # Check source files for matches
+            source_dir = analyzer.workspace_dir / analyzer.settings.get('source_folder', 'src')
+            if source_dir.exists():
+                for file_path in source_dir.rglob('*'):
+                    if not analyzer._should_include_file(str(file_path)):
+                        continue
+                        
+                    # Simple keyword matching for now
+                    # TODO: Use more sophisticated matching with AI
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read().lower()
+                            
+                            # Check for domain keywords in content
+                            keyword_matches = []
+                            for keyword in description.split():
+                                if len(keyword) > 3 and keyword in content:  # Skip short words
+                                    keyword_matches.append(keyword)
+                            
+                            if keyword_matches:
+                                rel_path = file_path.relative_to(analyzer.workspace_dir)
+                                matching_files.append(str(rel_path))
+                                reasons.append(f"Found keywords: {', '.join(keyword_matches)}")
+                    except Exception as e:
+                        continue
+            
+            # Calculate confidence based on matching files
+            if matching_files:
+                confidence = min(0.8, 0.3 + (len(matching_files) * 0.1))  # Cap at 0.8
+                
+                recommendations.append(DomainRecommendation(
+                    domain_id=domain_id,
+                    name=domain_info.get('name', domain_id),
+                    description=domain_info.get('description', ''),
+                    subdomain_ids=domain_info.get('subdomain_ids', []),
+                    confidence=confidence,
+                    matching_files=matching_files,
+                    reasons=reasons,
+                    reasoning=f"Found {len(matching_files)} files with matching keywords from the domain description."
+                ))
+        
+        # Sort by confidence
+        recommendations.sort(key=lambda x: x.confidence, reverse=True)
+        
+        # Determine if changes are recommended
+        changes_detected = any(r.confidence > 0.5 for r in recommendations)
+        
+        return DomainRecommendationsResponse(
+            recommendations=recommendations,
+            changes_detected=changes_detected
         )
     except Exception as e:
-        logger.error(f"Error analyzing file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/analyze/start", response_model=AnalysisStartResponse)
+async def start_analysis(
+    request: AnalysisStartRequest,
+    analyzer: CodeAnalyzerService = Depends(get_code_analyzer)
+):
+    """Start code analysis for all or selected files."""
+    try:
+        source_dir = Path(analyzer.workspace_dir) / analyzer.settings.get('source_folder', 'src')
+        
+        # Get list of files to analyze
+        files_to_analyze = []
+        if request.files:
+            # Analyze specific files
+            for file_path in request.files:
+                full_path = source_dir / file_path
+                if full_path.exists() and analyzer._should_include_file(str(full_path)):
+                    files_to_analyze.append(str(full_path))
+        else:
+            # Analyze all files
+            for file_path in source_dir.rglob('*'):
+                if analyzer._should_include_file(str(file_path)):
+                    files_to_analyze.append(str(file_path))
+        
+        if not files_to_analyze:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid files found to analyze"
+            )
+        
+        # Store analysis state
+        analyzer.analysis_state = {
+            "status": "in_progress",
+            "total_files": len(files_to_analyze),
+            "completed_files": 0,
+            "current_file": None,
+            "files_to_analyze": files_to_analyze,
+            "results": {}
+        }
+        
+        # Start background analysis task
+        analyzer.start_analysis_task()
+        
+        return AnalysisStartResponse(
+            status="started",
+            message=f"Analysis started for {len(files_to_analyze)} files",
+            total_files=len(files_to_analyze)
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/analyze/progress", response_model=AnalysisProgressResponse)
+async def get_analysis_progress(
+    analyzer: CodeAnalyzerService = Depends(get_code_analyzer)
+):
+    """Get the current progress of code analysis."""
+    try:
+        state = analyzer.analysis_state
+        if not state:
+            logger.debug("No analysis state found, returning not_started status")
+            return AnalysisProgressResponse(
+                status="not_started",
+                progress=0.0,
+                total_files=0,
+                completed_files=0,
+                message="Analysis has not been started"
+            )
+        
+        total_files = state.get('total_files', 0)
+        completed_files = state.get('completed_files', 0)
+        progress = (completed_files / total_files * 100) if total_files > 0 else 0
+        
+        logger.debug(f"Analysis progress - Status: {state.get('status')}, Progress: {progress}%, "
+                    f"Completed: {completed_files}/{total_files}")
+        
+        return AnalysisProgressResponse(
+            status=state.get('status', 'unknown'),
+            progress=progress,
+            current_file=state.get('current_file'),
+            total_files=total_files,
+            completed_files=completed_files,
+            message=state.get('message', f"Analyzed {completed_files} of {total_files} files")
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting analysis progress: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/analyze/generate-requirements")
-async def generate_requirements_from_analysis():
-    """Generate requirements based on code analysis results."""
+async def generate_requirements(
+    request: AnalysisStartRequest,
+    analyzer: CodeAnalyzerService = Depends(get_code_analyzer),
+    parser: RequirementsParser = Depends(get_requirements_parser)
+):
+    """Generate requirements based on code analysis."""
     try:
-        logger.info("Starting requirements generation")
-        # Load latest results if current results are empty
-        if not analysis_results:
-            loaded_results = load_latest_analysis()
-            if loaded_results:
-                analysis_results.update(loaded_results)
-                logger.info(f"Loaded {len(loaded_results)} results from cache")
-            else:
-                logger.warning("No analysis results available")
-                raise HTTPException(
-                    status_code=400,
-                    detail="No analysis results available. Please run analysis first."
-                )
-        
-        # Load current settings to get available domains
-        current_settings = load_settings()
-        available_domains = list(current_settings.domains.keys())
-        logger.info(f"Available domains: {available_domains}")
-        
-        # Ensure requirements directory exists
-        requirements_dir = Path(WORKSPACE_DIR) / current_settings.requirements_folder
-        requirements_dir.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Requirements directory: {requirements_dir}")
-        
-        # Group analyses by their current domains
-        domain_analyses = {}
-        for analysis in analysis_results.values():
-            domain = analysis.domain or 'unassigned'
-            if domain not in domain_analyses:
-                domain_analyses[domain] = []
-            domain_analyses[domain].append(analysis)
-        
-        logger.info(f"Grouped analyses by domains: {list(domain_analyses.keys())}")
-        
-        # Generate context for each domain
-        all_requirements = []
+        # Get analysis results
+        results = analyzer.analysis_state.get('results', {})
+        if not results:
+            raise HTTPException(
+                status_code=400,
+                detail="No analysis results available. Please run code analysis first."
+            )
+
+        # Filter results if specific files were requested
+        if request.files:
+            results = {k: v for k, v in results.items() if k in request.files}
+
+        # Get available domains from settings
+        available_domains = list(analyzer.settings.get('domains', {}).keys())
+        if not available_domains:
+            raise HTTPException(
+                status_code=400,
+                detail="No domains configured in settings. Please configure domains first."
+            )
+
+        # Generate requirements for each domain
+        generated_requirements = []
         generated_files = []
-        for domain, analyses in domain_analyses.items():
-            logger.info(f"Generating requirements for domain: {domain} with {len(analyses)} files")
-            context = f"""Based on code analysis, this group contains {len(analyses)} files.
-Key purposes and functionality:
 
-{chr(10).join(f"- {analysis.purpose}" for analysis in analyses)}
-
-Key dependencies and interfaces:
-{chr(10).join(f"- {dep}" for analysis in analyses for dep in analysis.dependencies)}
-
-Implementation patterns:
-{chr(10).join(f"- {detail}" for analysis in analyses for detail in analysis.implementation_details)}
-
-Files in this domain:
-{chr(10).join(f"- {analysis.file_path}" for analysis in analyses)}
-"""
-            logger.debug(f"Context for domain {domain}: {context[:200]}...")
+        # Group files by domain
+        domain_files = {}
+        for file_path, analysis in results.items():
+            # If domain is None, let AI service determine the domain
+            domain = analysis.get('domain')
+            if domain is None:
+                # Create context for domain determination
+                file_context = (
+                    f"File: {file_path}\n"
+                    f"Purpose: {analysis.get('purpose', '')}\n"
+                    f"Key Functionality: {', '.join(analysis.get('key_functionality', []))}\n"
+                    f"Implementation Details: {', '.join(analysis.get('implementation_details', []))}"
+                )
+                domain = await analyzer.ai_service.determine_domain(file_context, available_domains)
+                if domain is None:
+                    domain = "unknown"  # Fallback if AI can't determine domain
             
-            # Generate requirements for this group
-            requirements = await ai.generate_requirements(domain, context)
-            logger.info(f"Generated {len(requirements)} requirements for domain {domain}")
+            if domain not in domain_files:
+                domain_files[domain] = []
+            domain_files[domain].append((file_path, analysis))
+
+        # Generate requirements for each domain
+        for domain, files in domain_files.items():
+            if domain == "unknown":
+                continue  # Skip files with unknown domain
+                
+            # Prepare context for requirement generation
+            context = "\n\n".join([
+                f"File: {file_path}\n"
+                f"Purpose: {analysis.get('purpose', '')}\n"
+                f"Key Functionality: {', '.join(analysis.get('key_functionality', []))}\n"
+                f"Implementation Details: {', '.join(analysis.get('implementation_details', []))}"
+                for file_path, analysis in files
+            ])
+
+            # Generate requirements using AI service
+            domain_requirements = await analyzer.ai_service.generate_requirements(domain, context)
             
-            # For each requirement, determine the most suitable domain
-            for req in requirements:
-                logger.debug(f"Processing requirement: {req.id}")
-                # Create a context focused on this requirement
-                req_context = f"""Requirement:
-ID: {req.id}
-Description: {req.description}
-Additional Notes: {', '.join(req.additional_notes)}
+            # Save generated requirements
+            for req in domain_requirements:
+                # Add implementation files
+                req.implementation_files = [file_path for file_path, _ in files]
+                # Convert GeneratedRequirement to Requirement
+                requirement = Requirement(
+                    id=req.id,
+                    domain=req.domain,
+                    description=req.description,
+                    linked_blocks=req.linked_blocks,
+                    additional_notes=req.additional_notes,
+                    implementation_files=req.implementation_files
+                )
+                parser.save_requirement(requirement)
+                generated_requirements.append(requirement)
+                generated_files.append(f"requirements/{domain}/{req.id.lower()}.yaml")
 
-Available domains: {', '.join(available_domains)}
-
-Please determine the most suitable domain for this requirement based on its content and purpose."""
-                
-                # Determine the best domain for this requirement
-                suggested_domain = await ai.determine_domain(req_context, available_domains)
-                if suggested_domain:
-                    logger.info(f"Requirement {req.id}: suggested domain = {suggested_domain}")
-                    req.domain = suggested_domain
-                
-                # Save requirement to file
-                req_file = requirements_dir / f"{req.id.lower()}.md"
-                req_content = f"""---
-id: {req.id}
-domain: {req.domain}
----
-
-# {req.description}
-
-## Additional Notes
-{chr(10).join(f'- {note}' for note in req.additional_notes)}
-
-## Linked Blocks
-{chr(10).join(f'- {block}' for block in req.linked_blocks)}
-
-## Implementation Files
-{chr(10).join(f'- {analysis.file_path}' for analysis in analyses)}
-"""
-                try:
-                    req_file.write_text(req_content)
-                    logger.info(f"Saved requirement to file: {req_file}")
-                    generated_files.append(str(req_file))
-                except Exception as e:
-                    logger.error(f"Error saving requirement file {req_file}: {e}")
-                    
-                all_requirements.append(req)
-        
-        # Scan for code references after generating all requirements
-        logger.info("Scanning for code references in generated requirements")
-        mapper.scan_code_for_references()
-        
-        logger.info(f"Generated {len(all_requirements)} total requirements across {len(generated_files)} files")
         return {
+            "status": "success",
             "requirements": [
                 {
                     "id": req.id,
                     "domain": req.domain,
                     "description": req.description,
-                    "additional_notes": req.additional_notes,
                     "linked_blocks": req.linked_blocks,
-                    "file_path": str(requirements_dir / f"{req.id.lower()}.md"),
-                    "code_references": [
-                        {
-                            "file": ref.file,
-                            "line": ref.line,
-                            "function": ref.function,
-                            "type": ref.type,
-                            "url": mapper.get_vscode_url(ref)
-                        }
-                        for ref in mapper.get_references(req.id)
-                    ]
+                    "additional_notes": req.additional_notes,
+                    "implementation_files": req.implementation_files,
+                    "code_references": []  # Add empty code references as expected by frontend
                 }
-                for req in all_requirements
+                for req in generated_requirements
             ],
             "generated_files": generated_files
         }
-        
+
     except Exception as e:
-        logger.error(f"Error generating requirements from analysis: {e}")
+        logger.error(f"Error generating requirements: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/analyze/recommend-domains")
-async def recommend_domains():
-    """Generate domain recommendations based on code analysis."""
-    try:
-        # Load latest results if current results are empty
-        if not analysis_results:
-            loaded_results = load_latest_analysis()
-            if loaded_results:
-                analysis_results.update(loaded_results)
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="No analysis results available. Please run analysis first."
-                )
-
-        # Load current settings to get existing domains
-        current_settings = load_settings()
-        
-        # Prepare context from analyses
-        context = "Based on code analysis, here are the analyzed files and their characteristics:\n\n"
-        for file_path, analysis in analysis_results.items():
-            context += f"\nFile: {file_path}\n"
-            context += f"Purpose: {analysis.purpose}\n"
-            context += f"Key functionality: {', '.join(analysis.key_functionality)}\n"
-            context += f"Current domain: {analysis.domain or 'unassigned'}\n"
-            
-        context += "\nCurrent domain structure:\n"
-        for domain_id, domain in current_settings.domains.items():
-            context += f"\n- {domain_id}: {domain.name}"
-            if domain.description:
-                context += f"\n  Description: {domain.description}"
-            if domain.subdomain_ids:
-                context += f"\n  Subdomains: {', '.join(domain.subdomain_ids)}"
-
-        # Generate domain recommendations using AI
-        recommendations = await ai.recommend_domains(context)
-        return recommendations
-        
-    except Exception as e:
-        logger.error(f"Error generating domain recommendations: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Add a test endpoint to verify API is accessible
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    logger.info("Health check endpoint called")
+    return {"status": "ok"}

@@ -588,13 +588,6 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
     }
   };
 
-  // Add useEffect to check domains when cache is loaded
-  useEffect(() => {
-    if (!isLoadingCache && Object.keys(results).length > 0) {
-      checkDomainRecommendations();
-    }
-  }, [isLoadingCache]);
-
   // Add useEffect to fetch available domains from settings
   useEffect(() => {
     const fetchDomains = async () => {
@@ -745,8 +738,85 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
                             Select for reanalysis
                           </Checkbox>
                         </HStack>
-                        <Text>{analysis.purpose}</Text>
-                        {/* ... rest of the analysis display ... */}
+                        <VStack align="stretch" spacing={3}>
+                          <Box>
+                            <Text fontWeight="semibold">Purpose:</Text>
+                            <Text>{analysis.purpose}</Text>
+                          </Box>
+                          
+                          <Box>
+                            <Text fontWeight="semibold">Key Functionality:</Text>
+                            <List styleType="disc" pl={4}>
+                              {analysis.key_functionality.map((item, idx) => (
+                                <ListItem key={idx}>{item}</ListItem>
+                              ))}
+                            </List>
+                          </Box>
+                          
+                          <Box>
+                            <Text fontWeight="semibold">Dependencies:</Text>
+                            <List styleType="disc" pl={4}>
+                              {analysis.dependencies.map((item, idx) => (
+                                <ListItem key={idx}>{item}</ListItem>
+                              ))}
+                            </List>
+                          </Box>
+                          
+                          <Box>
+                            <Text fontWeight="semibold">Implementation Details:</Text>
+                            <List styleType="disc" pl={4}>
+                              {analysis.implementation_details.map((item, idx) => (
+                                <ListItem key={idx}>{item}</ListItem>
+                              ))}
+                            </List>
+                          </Box>
+                          
+                          <Box>
+                            <Text fontWeight="semibold">Potential Issues:</Text>
+                            <List styleType="disc" pl={4}>
+                              {analysis.potential_issues.map((item, idx) => (
+                                <ListItem key={idx}>{item}</ListItem>
+                              ))}
+                            </List>
+                          </Box>
+                          
+                          {analysis.functions && analysis.functions.length > 0 && (
+                            <Box>
+                              <Text fontWeight="semibold">Functions:</Text>
+                              <Accordion allowMultiple>
+                                {analysis.functions.map((func, idx) => (
+                                  <AccordionItem key={idx}>
+                                    <AccordionButton>
+                                      <Box flex="1" textAlign="left">
+                                        <Text fontWeight="medium">{func.name}</Text>
+                                      </Box>
+                                      <AccordionIcon />
+                                    </AccordionButton>
+                                    <AccordionPanel>
+                                      <VStack align="stretch" spacing={2}>
+                                        <Text><strong>Line:</strong> {func.line_number}</Text>
+                                        <Text><strong>Description:</strong> {func.description}</Text>
+                                        {func.parameters.length > 0 && (
+                                          <Box>
+                                            <Text><strong>Parameters:</strong></Text>
+                                            <List styleType="disc" pl={4}>
+                                              {func.parameters.map((param, pidx) => (
+                                                <ListItem key={pidx}>{param}</ListItem>
+                                              ))}
+                                            </List>
+                                          </Box>
+                                        )}
+                                        {func.return_type && (
+                                          <Text><strong>Return Type:</strong> {func.return_type}</Text>
+                                        )}
+                                      </VStack>
+                                    </AccordionPanel>
+                                  </AccordionItem>
+                                ))}
+                              </Accordion>
+                            </Box>
+                          )}
+                        </VStack>
                       </Box>
                     ))}
                   </VStack>

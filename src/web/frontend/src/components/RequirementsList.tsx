@@ -48,14 +48,24 @@ const RequirementsList: React.FC<RequirementsListProps> = ({
 
   const groupedRequirements = React.useMemo(() => {
     const groups: Record<string, Requirement[]> = {};
-    Object.values(requirements).forEach((req) => {
-      if (!groups[req.domain]) {
-        groups[req.domain] = [];
-      }
-      groups[req.domain].push(req);
-    });
+    if (requirements) {
+      Object.values(requirements).forEach((req) => {
+        if (!groups[req.domain]) {
+          groups[req.domain] = [];
+        }
+        groups[req.domain].push(req);
+      });
+    }
     return groups;
   }, [requirements]);
+
+  if (!requirements || Object.keys(requirements).length === 0) {
+    return (
+      <Box p={4} textAlign="center">
+        <Text color="gray.500">No requirements found</Text>
+      </Box>
+    );
+  }
 
   return (
     <Box>

@@ -7,7 +7,7 @@ import os
 import logging
 import traceback
 import json
-from openai import AsyncOpenAI
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -59,72 +59,151 @@ class OpenAIService(IAIService):
             logger.error("No OpenAI API key provided")
             raise ValueError("OpenAI API key is required")
         
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        self.client = OpenAI(api_key=self.api_key)
         logger.debug("OpenAI client initialized")
 
-    async def _get_completion(self, prompt: str, max_tokens: int = 2000, temperature: float = 0.2) -> str:
-        """Get completion from OpenAI."""
+        # Define JSON schemas for responses
+        self.file_analysis_schema = {
+            "name": "file_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "purpose": {"type": "string"},
+                    "key_functionality": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "dependencies": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "implementation_details": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "potential_issues": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": [
+                    "purpose",
+                    "key_functionality",
+                    "dependencies",
+                    "implementation_details",
+                    "potential_issues"
+                ],
+                "additionalProperties": False
+            }
+        }
+
+        self.function_analysis_schema = {
+            "name": "function_analysis",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "functions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "line": {"type": "integer"},
+                                "description": {"type": "string"},
+                                "parameters": {
+                                    "type": "array",
+                                    "items": {"type": "string"}
+                                },
+                                "return_type": {
+                                    "type": ["string", "null"]
+                                }
+                            },
+                            "required": ["name", "line", "description", "parameters", "return_type"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                "required": ["functions"],
+                "additionalProperties": False
+            }
+        }
+
+    async def analyze_code(self, prompt: str, is_function_analysis: bool = False) -> str:
+        """Analyze code using OpenAI's API with JSON schema validation."""
         try:
-            logger.debug(f"Sending completion request to OpenAI (max_tokens={max_tokens}, temp={temperature})")
-            logger.debug(f"Prompt preview: {prompt[:200]}...")
+            schema = self.function_analysis_schema if is_function_analysis else self.file_analysis_schema
             
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",  # or your preferred model
                 messages=[
                     {
                         "role": "system",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": "You are a code analysis assistant. Provide clear, structured responses."
-                            }
-                        ]
+                        "content": "You are a code analysis assistant. Analyze the provided code and return a structured JSON response according to the schema."
                     },
                     {
                         "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
+                        "content": prompt
                     }
                 ],
                 response_format={
-                    "type": "text"
+                    "type": "json_schema",
+                    "json_schema": schema
                 },
-                temperature=temperature,
-                max_completion_tokens=max_tokens,
-                top_p=1,
-                frequency_penalty=0,
-                presence_penalty=0
+                temperature=0.7
             )
-            
-            logger.debug("Received completion from OpenAI")
+
             result = response.choices[0].message.content
             logger.debug(f"Response preview: {result[:200]}...")
-            return result
             
-        except Exception as e:
-            logger.error(f"Error getting completion from OpenAI: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            raise
+            # Parse JSON to validate it
+            parsed_result = json.loads(result)
+            
+            # If this is a function analysis and the response is wrapped in a "functions" key,
+            # extract just the array
+            if is_function_analysis and isinstance(parsed_result, dict) and "functions" in parsed_result:
+                parsed_result = parsed_result["functions"]
+            
+            return json.dumps(parsed_result)
 
-    async def analyze_code(self, prompt: str) -> str:
-        """Analyze code using OpenAI."""
+        except Exception as e:
+            logger.error(f"Error in analyze_code: {e}")
+            # Return a valid but empty response based on the schema
+            if is_function_analysis:
+                return "[]"
+            else:
+                return json.dumps({
+                    "purpose": "Error analyzing code",
+                    "key_functionality": [],
+                    "dependencies": [],
+                    "implementation_details": ["Error during analysis"],
+                    "potential_issues": ["Failed to analyze code"]
+                })
+
+    async def _get_completion(self, prompt: str, max_tokens: int = 1000, temperature: float = 0.7) -> str:
+        """Get completion from OpenAI API."""
         try:
-            logger.debug("Sending code analysis request to OpenAI")
-            logger.debug(f"Prompt length: {len(prompt)} characters")
-            
-            return await self._get_completion(
-                prompt,
-                max_tokens=2000,
-                temperature=0.2
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",  # or your preferred model
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a software engineering assistant specializing in code analysis and requirements generation."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature
             )
             
+            return response.choices[0].message.content
+            
         except Exception as e:
-            logger.error(f"Error analyzing code with OpenAI: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"Error in _get_completion: {e}")
             raise
 
     def _mock_analysis(self) -> str:

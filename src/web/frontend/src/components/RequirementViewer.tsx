@@ -1,24 +1,25 @@
 import React from 'react';
 import {
+  Box,
+  VStack,
+  Text,
+  Heading,
+  Link,
+  UnorderedList,
+  ListItem,
+  Divider,
+  Card,
+  CardBody,
   Modal,
   ModalOverlay,
   ModalContent,
   ModalHeader,
-  ModalBody,
-  ModalFooter,
   ModalCloseButton,
+  ModalBody,
   Button,
-  Box,
-  Text,
-  Badge,
-  VStack,
-  Divider,
-  Heading,
-  useColorModeValue,
+  HStack,
 } from '@chakra-ui/react';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import MarkdownRenderer from './MarkdownRenderer';
 
 interface CodeReference {
   file: string;
@@ -33,134 +34,140 @@ interface Requirement {
   domain: string;
   description: string;
   linked_blocks: string[];
-  content: string;
+  additional_notes: string[];
+  implementation_files: string[];
   code_references: CodeReference[];
+  content?: string;
 }
 
 interface RequirementViewerProps {
+  requirement: Requirement;
   isOpen: boolean;
   onClose: () => void;
-  requirement: Requirement;
   onEdit?: () => void;
 }
 
 const RequirementViewer: React.FC<RequirementViewerProps> = ({
+  requirement,
   isOpen,
   onClose,
-  requirement,
-  onEdit,
+  onEdit
 }) => {
-  const bgColor = useColorModeValue('gray.50', 'gray.700');
-  const borderColor = useColorModeValue('gray.200', 'gray.600');
-  const linkColor = useColorModeValue('blue.500', 'blue.300');
-
-  const handleCodeLinkClick = (url: string) => {
-    window.open(url, '_blank');
-  };
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="xl">
+    <Modal isOpen={isOpen} onClose={onClose} size="xl" scrollBehavior="inside">
       <ModalOverlay />
       <ModalContent>
-        <ModalHeader>
-          <Text>{requirement.id}</Text>
-          <Badge colorScheme="blue" mt={1}>
-            {requirement.domain}
-          </Badge>
-        </ModalHeader>
+        <ModalHeader>Requirement {requirement.id}</ModalHeader>
         <ModalCloseButton />
-
-        <ModalBody>
-          <VStack spacing={4} align="stretch">
+        <ModalBody pb={6}>
+          <VStack align="stretch" spacing={4}>
             <Box>
-              <Heading size="sm" mb={2}>
-                Description
+              <Heading as="h2" size="md" color="blue.500" mb={2}>
+                {requirement.domain}
               </Heading>
-              <Text>{requirement.description}</Text>
+              <Text fontSize="lg" fontWeight="medium">
+                {requirement.description}
+              </Text>
             </Box>
 
             <Divider />
 
-            <Box>
-              <Heading size="sm" mb={2}>
-                Linked Blocks
-              </Heading>
+            {requirement.additional_notes.length > 0 && (
               <Box>
-                {requirement.linked_blocks.map((blockId) => (
-                  <Badge key={blockId} mr={2} mb={2} colorScheme="green">
-                    {blockId}
-                  </Badge>
-                ))}
+                <Heading as="h3" size="sm" mb={2}>
+                  Additional Notes
+                </Heading>
+                <UnorderedList spacing={1}>
+                  {requirement.additional_notes.map((note, index) => (
+                    <ListItem key={index}>
+                      <Text>{note}</Text>
+                    </ListItem>
+                  ))}
+                </UnorderedList>
               </Box>
-            </Box>
+            )}
 
-            <Divider />
+            {requirement.implementation_files.length > 0 && (
+              <Box>
+                <Heading as="h3" size="sm" mb={2}>
+                  Implementation Files
+                </Heading>
+                <UnorderedList spacing={1}>
+                  {requirement.implementation_files.map((file, index) => (
+                    <ListItem key={index}>
+                      <Text>{file}</Text>
+                    </ListItem>
+                  ))}
+                </UnorderedList>
+              </Box>
+            )}
 
-            <Box>
-              <Heading size="sm" mb={2}>
-                Code References
-              </Heading>
-              <VStack align="stretch" spacing={2}>
-                {requirement.code_references?.map((ref, index) => (
-                  <Box 
-                    key={index}
-                    p={2}
-                    borderWidth="1px"
-                    borderRadius="md"
-                    borderColor={borderColor}
-                    _hover={{ bg: bgColor, cursor: 'pointer' }}
-                    onClick={() => handleCodeLinkClick(ref.url)}
-                  >
-                    <Text color={linkColor} fontWeight="medium">
-                      {ref.file}:{ref.line} - {ref.function}
-                    </Text>
-                    <Text fontSize="sm" color="gray.500">
-                      Type: {ref.type}
-                    </Text>
-                  </Box>
-                ))}
-                {(!requirement.code_references || requirement.code_references.length === 0) && (
-                  <Text color="gray.500" fontSize="sm">
-                    No code references available
-                  </Text>
-                )}
-              </VStack>
-            </Box>
+            {requirement.linked_blocks.length > 0 && (
+              <Box>
+                <Heading as="h3" size="sm" mb={2}>
+                  Linked Blocks
+                </Heading>
+                <UnorderedList spacing={1}>
+                  {requirement.linked_blocks.map((block, index) => (
+                    <ListItem key={index}>
+                      <Text>{block}</Text>
+                    </ListItem>
+                  ))}
+                </UnorderedList>
+              </Box>
+            )}
 
-            <Divider />
+            {requirement.code_references?.length > 0 && (
+              <Box>
+                <Heading as="h3" size="sm" mb={2}>
+                  Code References
+                </Heading>
+                <UnorderedList spacing={1}>
+                  {requirement.code_references.map((ref, index) => (
+                    <ListItem key={index}>
+                      <Link 
+                        href={ref.url.replace(/'/g, '"').replace(/ /g, '')} 
+                        isExternal 
+                        color="blue.500">
+                        {ref.file}:{ref.line}
+                      </Link>
+                      {ref.function && ` (${ref.function})`}
+                    </ListItem>
+                  ))}
+                </UnorderedList>
+              </Box>
+            )}
 
-            <Box>
-              <Heading size="sm" mb={2}>
-                Content
-              </Heading>
-              <Box
-                p={4}
-                bg={bgColor}
-                borderRadius="md"
-                borderWidth="1px"
-                borderColor={borderColor}
-              >
-                <ReactMarkdown
-                  components={MarkdownRenderer}
-                  remarkPlugins={[remarkGfm]}
+            {requirement.content && (
+              <Box mt={4}>
+                <Heading as="h3" size="sm" mb={2}>
+                  Content
+                </Heading>
+                <Box 
+                  p={4} 
+                  bg="gray.50" 
+                  borderRadius="md"
+                  sx={{
+                    'pre': { whiteSpace: 'pre-wrap', wordBreak: 'break-word' }
+                  }}
                 >
-                  {requirement.content}
-                </ReactMarkdown>
+                  <ReactMarkdown>
+                    {requirement.content}
+                  </ReactMarkdown>
+                </Box>
               </Box>
-            </Box>
+            )}
           </VStack>
-        </ModalBody>
 
-        <ModalFooter>
-          {onEdit && (
-            <Button colorScheme="blue" mr={3} onClick={onEdit}>
-              Edit
-            </Button>
-          )}
-          <Button variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </ModalFooter>
+          <HStack justify="flex-end" mt={6}>
+            {onEdit && (
+              <Button colorScheme="blue" onClick={onEdit}>
+                Edit
+              </Button>
+            )}
+            <Button onClick={onClose}>Close</Button>
+          </HStack>
+        </ModalBody>
       </ModalContent>
     </Modal>
   );

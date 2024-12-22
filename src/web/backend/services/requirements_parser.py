@@ -3,9 +3,14 @@
 import os
 import logging
 import frontmatter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from pathlib import Path
+import yaml
+import jsonschema
+from ..schemas import REQUIREMENT_SCHEMA
+import traceback
+from .requirements_mapper import RequirementsMapper
 
 logger = logging.getLogger(__name__)
 
@@ -15,28 +20,90 @@ class Requirement:
     id: str
     domain: str
     description: str
-    linked_blocks: List[str]
-    additional_notes: List[str]
-    content: str
+    linked_blocks: List[str] = field(default_factory=list)
+    additional_notes: List[str] = field(default_factory=list)
+    implementation_files: List[str] = field(default_factory=list)
+    content: Optional[str] = None  # Optional markdown content for backward compatibility
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
+        # Get code references from mapper
+        mapper = RequirementsMapper()
+        code_refs = mapper.get_references(self.id)
+        
+        # Convert code references to dictionary format with VSCode URLs
+        code_references = []
+        for ref in code_refs:
+            ref_dict = {
+                'file': ref.file,
+                'line': ref.line,
+                'function': ref.function,
+                'type': ref.type,
+                'url': mapper.get_vscode_url(ref)
+            }
+            code_references.append(ref_dict)
+        
         return {
             'id': self.id,
             'domain': self.domain,
             'description': self.description,
             'linked_blocks': self.linked_blocks,
             'additional_notes': self.additional_notes,
-            'content': self.content
+            'implementation_files': self.implementation_files,
+            'content': self.content,
+            'code_references': code_references
         }
 
+    def to_yaml(self) -> str:
+        """Convert to YAML format."""
+        data = {
+            'id': self.id,
+            'domain': self.domain,
+            'description': self.description,
+            'linked_blocks': self.linked_blocks,
+            'additional_notes': self.additional_notes,
+            'implementation_files': self.implementation_files
+        }
+        # Validate against schema before saving
+        try:
+            jsonschema.validate(instance=data, schema=REQUIREMENT_SCHEMA)
+        except jsonschema.exceptions.ValidationError as e:
+            logger.error(f"Requirement validation failed: {e}")
+            raise
+        return yaml.dump(data, sort_keys=False)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Requirement':
+        """Create a Requirement from a dictionary, validating against schema."""
+        try:
+            # Validate against schema
+            jsonschema.validate(instance=data, schema=REQUIREMENT_SCHEMA)
+            
+            # Create instance
+            return cls(
+                id=data['id'],
+                domain=data['domain'],
+                description=data['description'],
+                linked_blocks=data.get('linked_blocks', []),
+                additional_notes=data.get('additional_notes', []),
+                implementation_files=data.get('implementation_files', []),
+                content=data.get('content')
+            )
+        except jsonschema.exceptions.ValidationError as e:
+            logger.error(f"Invalid requirement data: {e}")
+            raise
+
 class RequirementsParser:
-    """Parser for requirements in markdown format."""
+    """Parser for requirements in YAML format."""
     
     def __init__(self, workspace_dir: str = "/work"):
         """Initialize the parser with workspace directory."""
         self.workspace_dir = Path(workspace_dir)
         self.requirements_dir = self.workspace_dir / "requirements"
+        self.mapper = RequirementsMapper(workspace_dir)
+        
+        # Create requirements directory if it doesn't exist
+        self.requirements_dir.mkdir(parents=True, exist_ok=True)
         self.requirements: Dict[str, Requirement] = {}
         
         # Create workspace structure if it doesn't exist
@@ -47,8 +114,7 @@ class RequirementsParser:
         logger.info(f"Ensuring workspace structure in {self.workspace_dir}")
         
         # Create main directories
-        (self.workspace_dir / "requirements").mkdir(parents=True, exist_ok=True)
-        (self.workspace_dir / "generated").mkdir(parents=True, exist_ok=True)
+        self.requirements_dir.mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "architecture").mkdir(parents=True, exist_ok=True)
 
     def parse_all(self) -> Dict[str, Requirement]:
@@ -58,106 +124,91 @@ class RequirementsParser:
         
         if not self.requirements_dir.exists():
             logger.warning(f"Requirements directory not found: {self.requirements_dir}")
+            logger.info("Creating demo requirements")
             self._create_demo_requirements()
             return self.requirements
 
-        # Parse all .md files in subdirectories
-        for req_file in self.requirements_dir.glob("**/*.md"):
+        # Parse all .yaml files in subdirectories
+        yaml_files = list(self.requirements_dir.glob("**/*.yaml"))
+        logger.info(f"Found {len(yaml_files)} YAML files")
+        
+        for req_file in yaml_files:
+            logger.debug(f"Parsing requirement file: {req_file}")
             try:
                 with open(req_file) as f:
-                    post = frontmatter.load(f)
+                    data = yaml.safe_load(f)
+                    logger.debug(f"Loaded YAML data: {data}")
                     
-                    # Extract metadata
-                    req_id = post.get('id', '')
-                    if not req_id:
-                        logger.warning(f"Skipping {req_file}: No requirement ID found")
-                        continue
-                        
-                    # Create requirement object
-                    self.requirements[req_id] = Requirement(
-                        id=req_id,
-                        domain=post.get('domain', ''),
-                        description=post.get('description', ''),
-                        linked_blocks=post.get('linked_blocks', []),
-                        additional_notes=self._extract_notes(post.content),
-                        content=post.content
-                    )
-                    logger.debug(f"Parsed requirement: {req_id}")
+                # Create requirement object with validation
+                try:
+                    requirement = Requirement.from_dict(data)
+                    self.requirements[requirement.id] = requirement
+                    logger.debug(f"Successfully parsed requirement: {requirement.id}")
+                except jsonschema.exceptions.ValidationError as e:
+                    logger.error(f"Skipping invalid requirement in {req_file}: {e}")
+                    continue
                     
             except Exception as e:
                 logger.error(f"Error parsing {req_file}: {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 continue
         
         if not self.requirements:
-            logger.info("No requirements found, creating demo requirements")
+            logger.info("No valid requirements found, creating demo requirements")
             self._create_demo_requirements()
+        else:
+            logger.info(f"Successfully parsed {len(self.requirements)} requirements")
+            logger.debug(f"Parsed requirements: {self.requirements}")
             
         return self.requirements
 
-    def _extract_notes(self, content: str) -> List[str]:
-        """Extract additional notes from requirement content."""
-        notes = []
-        in_notes = False
+    def save_requirement(self, requirement: Requirement) -> Path:
+        """Save a requirement to a YAML file."""
+        # Create domain-based folder structure
+        domain_path = requirement.domain.split('/')
+        req_folder = self.requirements_dir.joinpath(*domain_path) if domain_path else self.requirements_dir
+        req_folder.mkdir(parents=True, exist_ok=True)
         
-        for line in content.split('\n'):
-            if '**Additional Notes:**' in line:
-                in_notes = True
-                continue
-            elif in_notes and line.strip().startswith('-'):
-                notes.append(line.strip()[1:].strip())
-            elif in_notes and line.strip() and not line.strip().startswith('-'):
-                in_notes = False
-                
-        return notes
-
-    def validate_block_references(self, architecture_blocks: List[str]) -> List[str]:
-        """Validate that all block references exist in the architecture."""
-        errors = []
-        for req_id, req in self.requirements.items():
-            for block_id in req.linked_blocks:
-                if block_id not in architecture_blocks:
-                    errors.append(f"Requirement {req_id} references non-existent block {block_id}")
-        return errors
+        try:
+            # Save as YAML (validation happens in to_yaml())
+            req_file = req_folder / f"{requirement.id.lower()}.yaml"
+            req_file.write_text(requirement.to_yaml())
+            logger.info(f"Saved requirement to {req_file}")
+            
+            # Add requirement references to implementation files
+            for file_path in requirement.implementation_files:
+                try:
+                    self.mapper.add_requirement_reference(requirement.id, file_path)
+                    logger.info(f"Added requirement reference to {file_path}")
+                except Exception as e:
+                    logger.error(f"Failed to add requirement reference to {file_path}: {e}")
+            
+            return req_file
+        except jsonschema.exceptions.ValidationError as e:
+            logger.error(f"Failed to save requirement {requirement.id}: {e}")
+            raise
 
     def _create_demo_requirements(self):
         """Create demo requirements if none exist."""
         demo_reqs = [
-            {
-                'id': 'RQ-DEMO-001',
-                'domain': 'demo',
-                'description': 'Example requirement to demonstrate the system.',
-                'linked_blocks': ['BLK-DEMO'],
-                'content': '''# Requirement RQ-DEMO-001
-
-**Description:**  
-This is an example requirement to demonstrate the system structure.
-
-**Additional Notes:**  
-- This is a placeholder requirement
-- Replace with actual project requirements
-- Place requirements in /work/requirements'''
-            }
+            Requirement(
+                id='RQ-DEMO-001',
+                domain='demo',
+                description='Example requirement to demonstrate the system.',
+                linked_blocks=['BLK-DEMO'],
+                additional_notes=[
+                    'This is a placeholder requirement',
+                    'Replace with actual project requirements',
+                    'Place requirements in /work/requirements'
+                ],
+                implementation_files=[]
+            )
         ]
         
         for req in demo_reqs:
-            domain_dir = self.requirements_dir / req['domain']
-            domain_dir.mkdir(parents=True, exist_ok=True)
-            
-            filepath = domain_dir / f"{req['id'].lower()}.md"
-            with open(filepath, 'w') as f:
-                f.write('---\n')
-                f.write(f"id: {req['id']}\n")
-                f.write(f"domain: {req['domain']}\n")
-                f.write(f"linked_blocks: {req['linked_blocks']}\n")
-                f.write(f"description: \"{req['description']}\"\n")
-                f.write('---\n\n')
-                f.write(req['content'])
-            
-            self.requirements[req['id']] = Requirement(
-                id=req['id'],
-                domain=req['domain'],
-                description=req['description'],
-                linked_blocks=req['linked_blocks'],
-                additional_notes=self._extract_notes(req['content']),
-                content=req['content']
-            ) 
+            try:
+                self.save_requirement(req)
+                self.requirements[req.id] = req
+            except jsonschema.exceptions.ValidationError as e:
+                logger.error(f"Failed to create demo requirement: {e}")
+                continue
