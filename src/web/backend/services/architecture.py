@@ -1,11 +1,12 @@
 """System architecture definition and validation."""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Any
 from pathlib import Path
 import json
 import logging
 from .code_analyzer import FunctionInfo
+from .requirements_mapper import RequirementsMapper
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,61 @@ class Block:
     subblocks: List['Block'] = field(default_factory=list)
     x: float = 0
     y: float = 0
+
+    def to_frontend_node(self) -> Dict[str, Any]:
+        """Convert block to frontend node format."""
+        return {
+            "id": self.block_id,
+            "label": self.name,
+            "type": "architectureBlock",
+            "position": {
+                "x": self.x,
+                "y": self.y
+            },
+            "data": {
+                "description": self.description,
+                "domain": self.domain,
+                "requirements": self.requirements
+            }
+        }
+
+    def to_frontend_format(self) -> Dict[str, Any]:
+        """Convert entire architecture to frontend format with nodes and edges."""
+        nodes = []
+        edges = []
+        
+        def process_block(block: Block):
+            nodes.append(block.to_frontend_node())
+            for subblock in block.subblocks:
+                # Add edge for hierarchy
+                edges.append({
+                    "id": f"{block.block_id}-{subblock.block_id}",
+                    "source": block.block_id,
+                    "target": subblock.block_id,
+                    "type": "smoothstep",
+                    "style": { "stroke": "#718096" }
+                })
+                process_block(subblock)
+                
+                # Add edges for shared requirements
+                for req in block.requirements:
+                    if req in subblock.requirements:
+                        edges.append({
+                            "id": f"{block.block_id}-{subblock.block_id}-{req}",
+                            "source": block.block_id,
+                            "target": subblock.block_id,
+                            "label": req,
+                            "type": "smoothstep",
+                            "style": { "stroke": "#2B6CB0", "strokeDasharray": "5,5" },
+                            "animated": True,
+                            "labelStyle": { "fill": "#2B6CB0", "fontSize": 12 }
+                        })
+        
+        process_block(self)
+        return {
+            "nodes": nodes,
+            "edges": edges
+        }
 
     def validate(self) -> List[str]:
         """Validate the block and its subblocks."""
@@ -106,6 +162,9 @@ def generate_architecture_from_analysis(analysis_results: Dict[str, List[Functio
         description="Auto-generated system architecture"
     )
     
+    # Initialize requirements mapper
+    req_mapper = RequirementsMapper(workspace_dir)
+    
     # Group functions by domain
     domain_functions: Dict[str, List[tuple[str, FunctionInfo]]] = {}
     
@@ -129,12 +188,16 @@ def generate_architecture_from_analysis(analysis_results: Dict[str, List[Functio
         )
         block_id_counter += 1
         
-        # Collect requirements from functions
+        # Get requirements for all files in this domain
         domain_requirements = set()
-        for _, func in functions:
-            if hasattr(func, 'requirements') and func.requirements:
-                domain_requirements.update(func.requirements)
+        for file_path, _ in functions:
+            # Get requirements that reference this file
+            file_reqs = req_mapper.get_requirements_for_file(file_path)
+            if file_reqs:
+                domain_requirements.update(file_reqs)
+        
         domain_block.requirements = list(domain_requirements)
+        logger.debug(f"Domain {domain} has requirements: {domain_requirements}")
         
         # Add domain block to root
         root.subblocks.append(domain_block)
@@ -158,12 +221,15 @@ def generate_architecture_from_analysis(analysis_results: Dict[str, List[Functio
                 )
                 block_id_counter += 1
                 
-                # Collect requirements from module functions
+                # Get requirements for all files in this module
                 module_requirements = set()
-                for _, func in module_funcs:
-                    if hasattr(func, 'requirements') and func.requirements:
-                        module_requirements.update(func.requirements)
+                for file_path, _ in module_funcs:
+                    file_reqs = req_mapper.get_requirements_for_file(file_path)
+                    if file_reqs:
+                        module_requirements.update(file_reqs)
+                
                 module_block.requirements = list(module_requirements)
+                logger.debug(f"Module {module} has requirements: {module_requirements}")
                 
                 domain_block.subblocks.append(module_block)
     

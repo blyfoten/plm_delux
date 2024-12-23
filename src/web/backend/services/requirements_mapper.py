@@ -223,9 +223,38 @@ class RequirementsMapper:
         logger.info(f"Generated VSCode URL (backend): {url}")
         return url
 
+    def _find_function_line(self, lines: List[str], function_name: str) -> Optional[int]:
+        """Find the line number where a function is defined."""
+        for i, line in enumerate(lines, start=1):
+            line = line.strip()
+            # Check for various function definition patterns
+            if any(
+                pattern in line.lower()
+                for pattern in [
+                    f"def {function_name.lower()}",
+                    f"void {function_name}",
+                    f"int {function_name}",
+                    f"bool {function_name}",
+                    f"string {function_name}",
+                    f"class {function_name}",
+                    f"struct {function_name}",
+                    f"function {function_name}"
+                ]
+            ) or f"::{function_name}" in line:
+                return i
+        return None
+
     def add_requirement_reference(self, requirement_id: str, file_path: str, line_number: int = 1) -> None:
         """Add a requirement reference to a source file."""
         try:
+            # Get code analyzer instance to access analysis results
+            from .code_analyzer import CodeAnalyzerService
+            analyzer = CodeAnalyzerService()
+            
+            # Get analysis results for the file
+            analysis_results = analyzer.analysis_state.get('results', {}).get(file_path, {})
+            functions = analysis_results.get('functions', [])
+            
             full_path = self.workspace_dir / file_path
             if not full_path.exists():
                 logger.warning(f"File not found: {full_path}")
@@ -254,17 +283,56 @@ class RequirementsMapper:
                 logger.debug(f"Requirement {requirement_id} already referenced in {file_path}")
                 return
 
-            # Find appropriate insertion point (before function/class definition)
-            insert_line = line_number
-            while insert_line > 1 and any(keyword in lines[insert_line-1].lower() 
-                for keyword in ['class', 'struct', 'void', 'int', 'bool', 'def', 'function', 'interface']):
-                insert_line -= 1
+            # Find the target function from analysis results
+            target_function = None
+            for func in functions:
+                if func.get('line_number') <= line_number and (
+                    func.get('end_line', float('inf')) >= line_number
+                ):
+                    target_function = func
+                    break
 
-            # Insert the reference
-            if insert_line <= len(lines):
+            function_start = line_number
+            function_name = ""
+
+            if target_function:
+                # Use function name to find current location in file
+                function_name = target_function.get('name', '')
+                if function_name:
+                    found_line = self._find_function_line(lines, function_name)
+                    if found_line:
+                        function_start = found_line
+                        logger.debug(f"Found function {function_name} at line {function_start}")
+            else:
+                # Fallback to searching for function definition around the line number
+                search_start = max(0, line_number - 5)  # Look a few lines before
+                search_end = min(len(lines), line_number + 5)  # and after
+                for i in range(search_start, search_end):
+                    line = lines[i].strip().lower()
+                    if any(keyword in line for keyword in ['def ', 'void ', 'int ', 'bool ', 'class ', 'struct ', 'function']):
+                        function_start = i + 1
+                        # Try to extract function name
+                        if 'def ' in line:
+                            function_name = line.split('def ')[1].split('(')[0].strip()
+                        elif '::' in line:
+                            function_name = line.split('::')[1].split('(')[0].strip()
+                        else:
+                            function_name = line.split(' ')[1].split('(')[0].strip()
+                        break
+
+            # Insert the reference just before the function definition
+            if function_start > 0:
+                # Find the right spot for the comment (before any existing comments)
+                insert_line = function_start
+                while insert_line > 1 and any(
+                    lines[insert_line-2].strip().startswith(c) 
+                    for c in ['#', '//', '/*']
+                ):
+                    insert_line -= 1
                 lines.insert(insert_line - 1, reference)
             else:
-                lines.append('\n' + reference)
+                # If no function found, insert at the specified line
+                lines.insert(line_number - 1, reference)
 
             # Write back to file
             with open(full_path, 'w', encoding='utf-8') as f:
@@ -273,13 +341,13 @@ class RequirementsMapper:
             # Add to mappings
             code_ref = CodeReference(
                 file=str(file_path),
-                line=insert_line,
-                function="",  # Will be updated by scan_code_for_references
+                line=function_start if function_start > 0 else line_number,
+                function=function_name,
                 type="implementation"
             )
             self.add_mapping(requirement_id, code_ref)
 
-            logger.info(f"Added requirement reference to {file_path} at line {insert_line}")
+            logger.info(f"Added requirement reference to {file_path} at line {function_start} (function: {function_name})")
 
             # Rescan the file to update function information
             self._scan_file(full_path)
@@ -287,3 +355,13 @@ class RequirementsMapper:
         except Exception as e:
             logger.error(f"Error adding requirement reference to {file_path}: {e}")
             logger.error(traceback.format_exc())
+
+    def get_requirements_for_file(self, file_path: str) -> List[str]:
+        """Get all requirements that reference a specific file."""
+        requirements = []
+        for req_id, refs in self.mappings.items():
+            for ref in refs:
+                if ref.file == file_path:
+                    requirements.append(req_id)
+                    break  # Found a reference, no need to check other refs for this requirement
+        return requirements

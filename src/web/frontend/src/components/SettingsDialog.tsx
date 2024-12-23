@@ -77,7 +77,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      fetch('http://localhost:8000/api/settings')
+      fetch('/api/settings')
         .then((response) => response.json())
         .then((data) => setSettings(data))
         .catch((error) => console.error('Error loading settings:', error));
@@ -86,7 +86,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   const handleSave = async () => {
     try {
-      await fetch('http://localhost:8000/api/settings', {
+      await fetch('/api/settings', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

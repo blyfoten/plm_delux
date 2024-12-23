@@ -38,7 +38,7 @@ const CodeGenerator: React.FC<CodeGeneratorProps> = ({ requirements }) => {
 
     setIsGenerating(true);
     try {
-      const response = await fetch('http://localhost:8000/api/code/generate', {
+      const response = await fetch('/api/code/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

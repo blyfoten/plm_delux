@@ -9,7 +9,7 @@ import yaml
 import logging
 from .services.requirements_parser import RequirementsParser, Requirement
 from .services.code_analyzer import CodeAnalyzerService
-from .services.architecture import Block, load_or_create_architecture, generate_architecture_from_analysis
+from .services.architecture import Block, load_or_create_architecture, save_architecture, generate_architecture_from_analysis
 from .schemas import REQUIREMENT_SCHEMA, FILE_ANALYSIS_SCHEMA, FUNCTION_INFO_SCHEMA
 from pathlib import Path
 import traceback
@@ -328,47 +328,18 @@ async def get_analysis_results(analyzer: CodeAnalyzerService = Depends(get_code_
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/architecture", response_model=ArchitectureResponse)
-async def get_architecture(analyzer: CodeAnalyzerService = Depends(get_code_analyzer)):
+@app.get("/api/architecture")
+async def get_architecture():
     """Get architecture diagram data."""
     try:
-        # Create nodes for each domain
-        nodes = []
-        edges = []
+        # Load existing architecture
+        architecture = load_or_create_architecture()
         
-        for domain_id, domain_info in analyzer.settings.get('domains', {}).items():
-            # Add domain node
-            nodes.append(ArchitectureNode(
-                id=domain_id,
-                label=domain_info.get('name', domain_id),
-                type="domain",
-                data={
-                    "description": domain_info.get('description', ''),
-                    "type": "domain"
-                }
-            ))
-            
-            # Add subdomain nodes and edges
-            for subdomain_id in domain_info.get('subdomain_ids', []):
-                node_id = f"{domain_id}_{subdomain_id}"
-                nodes.append(ArchitectureNode(
-                    id=node_id,
-                    label=subdomain_id,
-                    type="subdomain",
-                    data={
-                        "parent": domain_id,
-                        "type": "subdomain"
-                    }
-                ))
-                edges.append(ArchitectureEdge(
-                    id=f"edge_{domain_id}_{subdomain_id}",
-                    source=domain_id,
-                    target=node_id,
-                    type="contains"
-                ))
-        
-        return ArchitectureResponse(nodes=nodes, edges=edges)
+        # Convert to frontend format
+        return architecture.to_frontend_format()
     except Exception as e:
+        logger.error(f"Error getting architecture: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/analyze/recommend-domains", response_model=DomainRecommendationsResponse)
@@ -640,12 +611,45 @@ async def generate_requirements(
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/architecture/save")
+async def save_architecture_layout(architecture: dict):
+    """Save architecture layout."""
+    try:
+        # Load existing architecture to preserve non-layout data
+        current = load_or_create_architecture()
+        
+        # Update positions from the request
+        for block_id, block_data in architecture.get('blocks', {}).items():
+            block = current.find_block(block_id)
+            if block:
+                block.x = block_data.get('x', block.x)
+                block.y = block_data.get('y', block.y)
+                if 'domain' in block_data:
+                    block.domain = block_data['domain']
+                if 'description' in block_data:
+                    block.description = block_data['description']
+                if 'requirements' in block_data:
+                    block.requirements = block_data['requirements']
+        
+        # Save updated architecture
+        save_architecture(current)
+        
+        # Return the updated architecture in frontend format
+        return current.to_frontend_format()
+    except Exception as e:
+        logger.error(f"Error saving architecture layout: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": f"Failed to save architecture layout: {str(e)}"}
+        )
+
 @app.get("/api/architecture/generate")
 async def generate_architecture():
     """Generate system architecture from latest code analysis results."""
     try:
         analyzer = get_code_analyzer()
-        # Get results from analysis state instead of non-existent method
+        # Get results from analysis state
         results = analyzer.analysis_state.get('results', {})
         if not results:
             return JSONResponse(
@@ -664,29 +668,8 @@ async def generate_architecture():
         # Generate architecture
         architecture = generate_architecture_from_analysis(formatted_results)
         
-        # Convert to API response format
-        response = {
-            "blocks": {},
-            "root_id": architecture.block_id
-        }
-        
-        def add_block_to_response(block: Block):
-            response["blocks"][block.block_id] = {
-                "name": block.name,
-                "domain": block.domain,
-                "description": block.description,
-                "requirements": block.requirements,
-                "subblocks": [b.block_id for b in block.subblocks],
-                "x": block.x,
-                "y": block.y
-            }
-            for subblock in block.subblocks:
-                add_block_to_response(subblock)
-        
-        add_block_to_response(architecture)
-        logger.info(f"Generated architecture with {len(response['blocks'])} blocks")
-        
-        return response
+        # Convert to frontend format and return
+        return architecture.to_frontend_format()
         
     except Exception as e:
         logger.error(f"Error generating architecture: {str(e)}")

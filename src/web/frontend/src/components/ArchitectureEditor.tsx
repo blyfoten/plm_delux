@@ -12,14 +12,30 @@ import ReactFlow, {
 import 'reactflow/dist/style.css';
 import { Box, useToast, HStack, Button } from '@chakra-ui/react';
 import ArchitectureNode from './ArchitectureNode';
+import { debounce } from 'lodash';
 
 const nodeTypes = {
   architectureBlock: ArchitectureNode,
 };
 
+interface Block {
+  name: string;
+  domain?: string;
+  description?: string;
+  requirements?: string[];
+  subblocks?: string[];
+  x?: number;
+  y?: number;
+}
+
+interface Architecture {
+  root_id: string;
+  blocks: Record<string, Block>;
+}
+
 interface ArchitectureEditorProps {
-  architecture: any;
-  onArchitectureUpdate: (architecture: any) => void;
+  architecture: Architecture;
+  onArchitectureUpdate: (architecture: Architecture) => void;
 }
 
 const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
@@ -30,170 +46,313 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const toast = useToast();
 
-  // Convert architecture to nodes and edges
-  useEffect(() => {
-    if (!architecture || !architecture.blocks) return;
-
-    const newNodes: Node[] = [];
-    const newEdges: Edge[] = [];
-    const processedBlocks = new Set();
-
-    // Calculate initial positions for blocks
-    const calculatePosition = (blockId: string, level: number, index: number, totalInLevel: number) => {
-      const LEVEL_HEIGHT = 150;
-      const LEVEL_WIDTH = 1200;
-      const BLOCK_SPACING = LEVEL_WIDTH / (totalInLevel + 1);
-      
-      return {
-        x: BLOCK_SPACING * (index + 1) - LEVEL_WIDTH / 2,
-        y: level * LEVEL_HEIGHT
-      };
-    };
-
-    // First pass: count blocks per level
-    const blocksPerLevel: { [level: number]: number } = {};
-    const blockLevels: { [blockId: string]: number } = {};
-
-    const countBlocksInLevel = (blockId: string, level: number) => {
-      blocksPerLevel[level] = (blocksPerLevel[level] || 0) + 1;
-      blockLevels[blockId] = level;
-
-      const block = architecture.blocks[blockId];
-      if (block?.subblocks) {
-        block.subblocks.forEach(subId => {
-          countBlocksInLevel(subId, level + 1);
-        });
-      }
-    };
-
-    countBlocksInLevel(architecture.root_id, 0);
-
-    // Second pass: create nodes and edges
-    const levelCounters: { [level: number]: number } = {};
-
-    const processBlock = (blockId: string) => {
-      if (processedBlocks.has(blockId)) return;
-      processedBlocks.add(blockId);
-
-      const block = architecture.blocks[blockId];
-      if (!block) return;
-
-      const level = blockLevels[blockId];
-      levelCounters[level] = (levelCounters[level] || 0);
-
-      // Calculate position
-      const position = calculatePosition(
-        blockId,
-        level,
-        levelCounters[level],
-        blocksPerLevel[level]
-      );
-      levelCounters[level]++;
-
-      // Create node
-      newNodes.push({
-        id: blockId,
-        type: 'architectureBlock',
-        position: { 
-          x: block.x || position.x,
-          y: block.y || position.y
-        },
-        data: {
-          label: block.name,
-          domain: block.domain,
-          description: block.description,
-          requirements: block.requirements || [],
-          onUpdate: handleNodeUpdate,
-        },
-        style: {
-          width: 250,
-          minHeight: block.description ? 120 : 80
-        }
-      });
-
-      // Process subblocks and create edges
-      if (block.subblocks) {
-        block.subblocks.forEach(subId => {
-          // Create edge
-          newEdges.push({
-            id: `${blockId}-${subId}`,
-            source: blockId,
-            target: subId,
-            type: 'smoothstep',
-            style: { stroke: '#718096' }  // Gray color for structure edges
-          });
-
-          // Process subblock
-          processBlock(subId);
-        });
-      }
-
-      // Add requirement connections
-      if (block.requirements) {
-        block.requirements.forEach(reqId => {
-          // Find other blocks with the same requirement
-          Object.entries(architecture.blocks).forEach(([otherId, otherBlock]: [string, any]) => {
-            if (otherId !== blockId && otherBlock.requirements?.includes(reqId)) {
-              newEdges.push({
-                id: `${blockId}-${otherId}-${reqId}`,
-                source: blockId,
-                target: otherId,
-                label: reqId,
-                type: 'smoothstep',
-                style: { stroke: '#2B6CB0', strokeDasharray: '5,5' },  // Blue color for requirement edges
-                animated: true,
-                labelStyle: { fill: '#2B6CB0', fontSize: 12 }
-              });
-            }
-          });
-        });
-      }
-    };
-
-    processBlock(architecture.root_id);
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [architecture, setNodes, setEdges]);
-
   const onConnect = useCallback(
     (params: Connection) => setEdges((eds) => addEdge(params, eds)),
     [setEdges]
   );
 
+  // Save layout changes with debounce
+  const saveLayout = useCallback(
+    async (updatedArchitecture: any) => {
+      try {
+        // Format the architecture data to match the backend's expected structure
+        const formattedArchitecture = {
+          blocks: {},
+          root_id: updatedArchitecture.root_id
+        };
+
+        // Update block positions while preserving other data
+        Object.entries(updatedArchitecture.blocks).forEach(([blockId, blockData]: [string, any]) => {
+          formattedArchitecture.blocks[blockId] = {
+            ...blockData,
+            x: blockData.x || 0,
+            y: blockData.y || 0
+          };
+        });
+
+        const response = await fetch('/api/architecture/save', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(formattedArchitecture),
+        });
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Failed to save layout');
+        }
+      } catch (error) {
+        console.error("Error saving layout:", error);
+        toast({
+          title: "Error Saving Layout",
+          description: error instanceof Error ? error.message : "Failed to save layout",
+          status: "error",
+          duration: 5000,
+          isClosable: true,
+        });
+      }
+    },
+    [toast]
+  );
+
+  // Debounce the save function
+  const debouncedSave = useCallback(
+    debounce((arch: any) => saveLayout(arch), 1000),
+    [saveLayout]
+  );
+
   const handleNodeUpdate = useCallback(
     (nodeId: string, data: any) => {
-      const updatedArchitecture = { ...architecture };
-      updatedArchitecture.blocks[nodeId] = {
-        ...updatedArchitecture.blocks[nodeId],
-        ...data,
+      if (!architecture?.blocks || !nodeId) {
+        console.warn('Cannot update node: architecture or nodeId is missing');
+        return;
+      }
+
+      const block = architecture.blocks[nodeId];
+      if (!block) {
+        console.warn(`Block ${nodeId} not found in architecture`);
+        return;
+      }
+
+      const updatedArchitecture = { 
+        ...architecture,
+        blocks: {
+          ...architecture.blocks,
+          [nodeId]: {
+            ...block,
+            ...data,
+          }
+        }
       };
       onArchitectureUpdate(updatedArchitecture);
+      debouncedSave(updatedArchitecture);
     },
-    [architecture, onArchitectureUpdate]
+    [architecture, onArchitectureUpdate, debouncedSave]
   );
 
   const onNodeDragStop = useCallback(
-    (event: any, node: Node) => {
-      const updatedArchitecture = { ...architecture };
-      updatedArchitecture.blocks[node.id] = {
-        ...updatedArchitecture.blocks[node.id],
-        x: node.position.x,
-        y: node.position.y,
+    (event: React.MouseEvent | React.TouchEvent, node: Node) => {
+      if (!architecture?.blocks) {
+        console.debug('Architecture not initialized yet');
+        return;
+      }
+
+      if (!node?.id || !node?.position) {
+        console.debug('Invalid node data', { id: node?.id, position: node?.position });
+        return;
+      }
+
+      const block = architecture.blocks[node.id];
+      if (!block) {
+        console.debug(`Block ${node.id} not found in architecture`);
+        return;
+      }
+
+      const updatedArchitecture: Architecture = {
+        ...architecture,
+        blocks: {
+          ...architecture.blocks,
+          [node.id]: {
+            ...block,
+            x: Math.round(node.position.x),
+            y: Math.round(node.position.y),
+          }
+        }
       };
       onArchitectureUpdate(updatedArchitecture);
+      debouncedSave(updatedArchitecture);
     },
-    [architecture, onArchitectureUpdate]
+    [architecture, onArchitectureUpdate, debouncedSave]
   );
+
+  // Load architecture only once on mount
+  useEffect(() => {
+    const loadArchitecture = async () => {
+      try {
+        const response = await fetch('/api/architecture', {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          
+          // Check if we received nodes/edges format
+          if (data.nodes && data.edges) {
+            console.debug('Received nodes/edges format from backend');
+            
+            // Process nodes to ensure they have the correct type and add any missing properties
+            const processedNodes = data.nodes.map((node: any) => ({
+              ...node,
+              type: 'architectureBlock',
+              data: {
+                ...node.data,
+                onUpdate: handleNodeUpdate,
+              },
+              style: {
+                width: NODE_WIDTH,
+                minHeight: node.data?.description ? NODE_HEIGHT : NODE_HEIGHT * 0.6
+              }
+            }));
+
+            // Set nodes and edges directly
+            setNodes(processedNodes);
+            setEdges(data.edges);
+
+            // Create architecture object for state management
+            const blocks: Record<string, Block> = {};
+            processedNodes.forEach((node: any) => {
+              blocks[node.id] = {
+                name: node.label,
+                domain: node.data?.domain,
+                description: node.data?.description,
+                requirements: node.data?.requirements || [],
+                x: node.position.x,
+                y: node.position.y
+              };
+            });
+
+            const architectureData = {
+              root_id: processedNodes[0]?.id || 'BLK-SYSTEM',
+              blocks
+            };
+
+            onArchitectureUpdate(architectureData);
+          } else {
+            // Assume it's already in our expected format
+            onArchitectureUpdate(data);
+          }
+        } else {
+          toast({
+            title: "Error loading architecture",
+            description: `Server returned ${response.status}: ${response.statusText}`,
+            status: "error",
+            duration: 5000,
+            isClosable: true,
+          });
+        }
+      } catch (error) {
+        console.error("Error loading architecture:", error);
+        toast({
+          title: "Connection Error",
+          description: "Could not connect to the backend server. Please ensure the server is running.",
+          status: "error",
+          duration: null,
+          isClosable: true,
+        });
+      }
+    };
+
+    // Only load if no architecture is provided
+    if (!architecture || !architecture.blocks) {
+      loadArchitecture();
+    }
+  }, []); // Only run once on mount
+
+  // Update layout when architecture changes (e.g., after generation)
+  useEffect(() => {
+    if (!architecture?.blocks || !architecture?.root_id || !edges.length) {
+      return;
+    }
+
+    // Create a map of parent to children relationships
+    const parentToChildren: Record<string, string[]> = {};
+    edges.forEach(edge => {
+      if (!edge.source || !edge.target) return;
+      if (!parentToChildren[edge.source]) {
+        parentToChildren[edge.source] = [];
+      }
+      // Only consider structural edges (without requirement labels)
+      if (!edge.label) {
+        parentToChildren[edge.source].push(edge.target);
+      }
+    });
+
+    // Calculate levels for each node
+    const nodeLevels: Record<string, number> = {};
+    const calculateLevels = (nodeId: string, level: number) => {
+      nodeLevels[nodeId] = level;
+      const children = parentToChildren[nodeId] || [];
+      children.forEach(childId => calculateLevels(childId, level + 1));
+    };
+
+    // Start from the root node
+    calculateLevels(architecture.root_id, 0);
+
+    // Group nodes by level
+    const levelGroups: Record<number, string[]> = {};
+    Object.entries(nodeLevels).forEach(([nodeId, level]) => {
+      if (!levelGroups[level]) levelGroups[level] = [];
+      levelGroups[level].push(nodeId);
+    });
+
+    // Calculate positions with adjusted spacing
+    const VERTICAL_SPACING = 120;
+    const MIN_NODE_SPACING = 300;
+    const TOP_MARGIN = 40;
+    const NODE_WIDTH = 180;
+    const NODE_HEIGHT = 80;
+
+    // First pass: calculate total width needed for each level
+    const levelWidths: Record<number, number> = {};
+    Object.entries(levelGroups).forEach(([level, nodes]) => {
+      const totalWidth = nodes.length * MIN_NODE_SPACING;
+      levelWidths[parseInt(level)] = totalWidth;
+    });
+
+    // Find the maximum width needed
+    const maxWidth = Math.max(...Object.values(levelWidths));
+
+    // Second pass: position nodes
+    const updatedNodes = nodes.map(node => {
+      // If node has saved position, use it
+      if (architecture.blocks[node.id]?.x !== undefined && 
+          architecture.blocks[node.id]?.y !== undefined) {
+        return {
+          ...node,
+          position: {
+            x: architecture.blocks[node.id].x || 0,
+            y: architecture.blocks[node.id].y || 0
+          }
+        };
+      }
+
+      // Otherwise calculate new position
+      const level = nodeLevels[node.id] || 0;
+      const nodesInLevel = levelGroups[level] || [];
+      const indexInLevel = nodesInLevel.indexOf(node.id);
+      const totalInLevel = nodesInLevel.length;
+
+      const levelWidth = levelWidths[level];
+      const startX = -(maxWidth / 2);
+      const spacing = Math.max(MIN_NODE_SPACING, maxWidth / totalInLevel);
+      const x = startX + (indexInLevel * spacing) + (spacing / 2);
+      const y = (level * VERTICAL_SPACING) + TOP_MARGIN;
+
+      return {
+        ...node,
+        position: { x, y }
+      };
+    });
+
+    setNodes(updatedNodes);
+  }, [architecture?.root_id]); // Only run when root_id changes (i.e., new architecture generated)
 
   return (
     <Box 
-      height="80vh" 
+      height="45vh"
       width="100%" 
       border="1px" 
       borderColor="gray.200" 
       borderRadius="md"
       display="flex"
       flexDirection="column"
+      overflow="hidden"
     >
       <HStack p={2} spacing={4} borderBottom="1px" borderColor="gray.200">
         <Button
@@ -201,7 +360,7 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
           size="sm"
           onClick={async () => {
             try {
-              const response = await fetch('http://localhost:8000/api/architecture/generate');
+              const response = await fetch('/api/architecture/generate');
               if (!response.ok) {
                 const error = await response.json();
                 toast({
@@ -246,6 +405,15 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
         onNodeDragStop={onNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
+        fitViewOptions={{ 
+          padding: 0.2,
+          includeHiddenNodes: true,
+          minZoom: 0.2,
+          maxZoom: 0.8
+        }}
+        minZoom={0.1}
+        maxZoom={1.5}
+        defaultViewport={{ x: 0, y: 0, zoom: 0.4 }}
         style={{ flex: 1 }}
       >
         <Background />

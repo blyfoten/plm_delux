@@ -41,8 +41,8 @@ interface Architecture {
 }
 
 // Add after imports
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
-console.log('Using backend URL:', BACKEND_URL);
+const BACKEND_URL = '';  // Empty string since we're using proxy paths
+console.log('Using proxy for backend API calls');
 
 function App() {
   const [requirements, setRequirements] = useState<Record<string, Requirement>>({});

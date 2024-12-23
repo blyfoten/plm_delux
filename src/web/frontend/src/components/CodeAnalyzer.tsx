@@ -35,7 +35,7 @@ import {
   useDisclosure,
 } from '@chakra-ui/react';
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const BACKEND_URL = '';
 
 interface FileAnalysis {
   file_path: string;
