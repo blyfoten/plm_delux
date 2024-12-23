@@ -14,6 +14,13 @@ import { Box, useToast, HStack, Button } from '@chakra-ui/react';
 import ArchitectureNode from './ArchitectureNode';
 import { debounce } from 'lodash';
 
+// Node dimensions and spacing constants
+const NODE_WIDTH = 180;
+const NODE_HEIGHT = 80;
+const VERTICAL_SPACING = 120;
+const MIN_NODE_SPACING = 300;
+const TOP_MARGIN = 40;
+
 const nodeTypes = {
   architectureBlock: ArchitectureNode,
 };
@@ -182,11 +189,10 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
         if (response.ok) {
           const data = await response.json();
           
-          // Check if we received nodes/edges format
           if (data.nodes && data.edges) {
             console.debug('Received nodes/edges format from backend');
             
-            // Process nodes to ensure they have the correct type and add any missing properties
+            // Process nodes with consistent dimensions
             const processedNodes = data.nodes.map((node: any) => ({
               ...node,
               type: 'architectureBlock',
@@ -200,7 +206,6 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
               }
             }));
 
-            // Set nodes and edges directly
             setNodes(processedNodes);
             setEdges(data.edges);
 
@@ -224,7 +229,6 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
 
             onArchitectureUpdate(architectureData);
           } else {
-            // Assume it's already in our expected format
             onArchitectureUpdate(data);
           }
         } else {
@@ -248,7 +252,6 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
       }
     };
 
-    // Only load if no architecture is provided
     if (!architecture || !architecture.blocks) {
       loadArchitecture();
     }
