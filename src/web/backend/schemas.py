@@ -61,7 +61,8 @@ REQUIREMENT_SCHEMA: Dict[str, Any] = {
         "implementation_files": {
             "type": "array",
             "items": {"type": "string"}
-        }
+        },
+        "implementation_function": {"type": ["string", "null"]}
     },
     "required": ["id", "domain", "description"]
 }

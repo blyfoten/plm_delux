@@ -24,6 +24,7 @@ class Requirement:
     additional_notes: List[str] = field(default_factory=list)
     implementation_files: List[str] = field(default_factory=list)
     content: Optional[str] = None  # Optional markdown content for backward compatibility
+    implementation_function: Optional[str] = None  # Function that implements this requirement
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -51,7 +52,8 @@ class Requirement:
             'additional_notes': self.additional_notes,
             'implementation_files': self.implementation_files,
             'content': self.content,
-            'code_references': code_references
+            'code_references': code_references,
+            'implementation_function': self.implementation_function
         }
 
     def to_yaml(self) -> str:
@@ -62,7 +64,8 @@ class Requirement:
             'description': self.description,
             'linked_blocks': self.linked_blocks,
             'additional_notes': self.additional_notes,
-            'implementation_files': self.implementation_files
+            'implementation_files': self.implementation_files,
+            'implementation_function': self.implementation_function
         }
         # Validate against schema before saving
         try:
@@ -87,7 +90,8 @@ class Requirement:
                 linked_blocks=data.get('linked_blocks', []),
                 additional_notes=data.get('additional_notes', []),
                 implementation_files=data.get('implementation_files', []),
-                content=data.get('content')
+                content=data.get('content'),
+                implementation_function=data.get('implementation_function')
             )
         except jsonschema.exceptions.ValidationError as e:
             logger.error(f"Invalid requirement data: {e}")
@@ -178,8 +182,12 @@ class RequirementsParser:
             # Add requirement references to implementation files
             for file_path in requirement.implementation_files:
                 try:
-                    self.mapper.add_requirement_reference(requirement.id, file_path)
-                    logger.info(f"Added requirement reference to {file_path}")
+                    self.mapper.add_requirement_reference(
+                        requirement.id, 
+                        file_path,
+                        target_function=getattr(requirement, 'implementation_function', None)
+                    )
+                    logger.info(f"Added requirement reference to {file_path} (target function: {getattr(requirement, 'implementation_function', None)})")
                 except Exception as e:
                     logger.error(f"Failed to add requirement reference to {file_path}: {e}")
             

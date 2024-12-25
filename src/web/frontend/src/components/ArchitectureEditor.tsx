@@ -206,9 +206,6 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
               }
             }));
 
-            setNodes(processedNodes);
-            setEdges(data.edges);
-
             // Create architecture object for state management
             const blocks: Record<string, Block> = {};
             processedNodes.forEach((node: any) => {
@@ -227,7 +224,75 @@ const ArchitectureEditor: React.FC<ArchitectureEditorProps> = ({
               blocks
             };
 
+            // Set initial data
+            setNodes(processedNodes);
+            setEdges(data.edges);
             onArchitectureUpdate(architectureData);
+
+            // Calculate initial layout if all positions are at (0,0)
+            const needsLayout = processedNodes.every(node => 
+              node.position.x === 0 && node.position.y === 0
+            );
+
+            if (needsLayout) {
+              // Create parent-child relationships
+              const parentToChildren: Record<string, string[]> = {};
+              data.edges.forEach((edge: any) => {
+                if (!edge.source || !edge.target || edge.label) return;
+                if (!parentToChildren[edge.source]) {
+                  parentToChildren[edge.source] = [];
+                }
+                parentToChildren[edge.source].push(edge.target);
+              });
+
+              // Calculate levels
+              const nodeLevels: Record<string, number> = {};
+              const calculateLevels = (nodeId: string, level: number) => {
+                nodeLevels[nodeId] = level;
+                const children = parentToChildren[nodeId] || [];
+                children.forEach(childId => calculateLevels(childId, level + 1));
+              };
+              calculateLevels(architectureData.root_id, 0);
+
+              // Group by levels
+              const levelGroups: Record<number, string[]> = {};
+              Object.entries(nodeLevels).forEach(([nodeId, level]) => {
+                if (!levelGroups[level]) levelGroups[level] = [];
+                levelGroups[level].push(nodeId);
+              });
+
+              // Calculate positions
+              const updatedNodes = processedNodes.map(node => {
+                const level = nodeLevels[node.id] || 0;
+                const nodesInLevel = levelGroups[level] || [];
+                const indexInLevel = nodesInLevel.indexOf(node.id);
+                const totalInLevel = nodesInLevel.length;
+
+                const x = (indexInLevel - (totalInLevel - 1) / 2) * MIN_NODE_SPACING;
+                const y = level * VERTICAL_SPACING + TOP_MARGIN;
+
+                return {
+                  ...node,
+                  position: { x, y }
+                };
+              });
+
+              setNodes(updatedNodes);
+
+              // Update architecture with new positions
+              const updatedBlocks = { ...blocks };
+              updatedNodes.forEach(node => {
+                if (updatedBlocks[node.id]) {
+                  updatedBlocks[node.id].x = node.position.x;
+                  updatedBlocks[node.id].y = node.position.y;
+                }
+              });
+
+              onArchitectureUpdate({
+                ...architectureData,
+                blocks: updatedBlocks
+              });
+            }
           } else {
             onArchitectureUpdate(data);
           }

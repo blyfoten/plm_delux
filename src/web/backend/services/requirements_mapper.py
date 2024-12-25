@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import yaml
 import traceback
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,9 @@ class RequirementsMapper:
     def scan_code_for_references(self) -> None:
         """Scan code files for requirement references and update mappings."""
         logger.info("Starting code reference scan")
+        # Clear existing mappings before scanning
         self.mappings.clear()
+        logger.info("Cleared existing mappings")
         
         # Load settings to get source folder and patterns
         settings_path = self.workspace_dir / "plm_settings.yaml"
@@ -131,6 +134,7 @@ class RequirementsMapper:
                 
             current_req = None
             current_func = None
+            added_refs = set()  # Track already added references
             
             for i, line in enumerate(lines, start=1):
                 line = line.strip()
@@ -145,14 +149,11 @@ class RequirementsMapper:
                     if indicator in line:
                         # Extract requirement ID
                         if "RQ-" in line:
-                            # Find the RQ- pattern and extract the full ID
-                            import re
                             match = re.search(r'RQ-[A-Z_]+(?:-|\w)*\d+', line)
                             if match:
                                 current_req = match.group(0)
                                 logger.debug(f"Found requirement reference: {current_req}")
                         else:
-                            # Extract requirement ID after the indicator
                             parts = line.split(indicator)
                             if len(parts) > 1:
                                 current_req = parts[1].strip().split()[0].strip(':"*/')
@@ -160,41 +161,64 @@ class RequirementsMapper:
                 
                 # Look for function/method definitions
                 if current_req:
-                    # C++ class method or function
-                    if (line.startswith("void ") or 
-                        line.startswith("int ") or 
-                        line.startswith("bool ") or 
-                        line.startswith("string ") or
-                        "::" in line or
-                        line.startswith("class ") or
-                        line.startswith("struct ")):
-                        
-                        # Extract function/class name
-                        if "::" in line:  # Class method
-                            current_func = line.split("::")[1].split("(")[0].strip()
-                        else:  # Function or class
-                            current_func = line.split(" ")[1].split("(")[0].strip()
-                        
-                        ref = CodeReference(
-                            file=str(file_path.relative_to(self.workspace_dir)),
-                            line=i,
-                            function=current_func,
-                            type="implementation"
-                        )
-                        self.add_mapping(current_req, ref)
-                        logger.debug(f"Added mapping: {current_req} -> {ref.file}:{ref.line}")
+                    # Enhanced C++ function detection
+                    cpp_patterns = [
+                        # Class method definition (with or without class name)
+                        r'^(?:\w+::)?(\w+)\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*(?:->.*?)?\s*\{?$',
+                        # Standard function definition with any return type
+                        r'^(?:virtual\s+)?(?:static\s+)?(?:inline\s+)?(?:const\s+)?'
+                        r'(?:[\w:]+(?:<[^>]+>)?(?:\s*[&*]+)?)'  # Return type with templates and pointers
+                        r'\s+(\w+)\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*(?:->.*?)?\s*\{?$',
+                        # Constructor definition with initializer list
+                        r'^(\w+)::\1\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*\{?$',
+                        # Class/struct definition with inheritance
+                        r'^(?:class|struct)\s+(\w+)(?:\s*:\s*(?:public|protected|private)\s+[^{]+)?\s*\{?$',
+                        # Template function or class
+                        r'^template\s*<[^>]+>\s*(?:class|struct|[\w:]+(?:\s*[&*]+)?)\s+(\w+)',
+                    ]
                     
-                    # Python function
-                    elif line.startswith("def "):
-                        current_func = line.strip().split("def ")[1].split("(")[0]
-                        ref = CodeReference(
-                            file=str(file_path.relative_to(self.workspace_dir)),
-                            line=i,
-                            function=current_func,
-                            type="implementation"
-                        )
-                        self.add_mapping(current_req, ref)
-                        logger.debug(f"Added mapping: {current_req} -> {ref.file}:{ref.line}")
+                    # Python function pattern
+                    py_pattern = r'^def\s+(\w+)\s*\([^)]*\)\s*(?:->\s*[\w\[\],\s]+)?\s*:'
+                    
+                    found_func = False
+                    
+                    # Check C++ patterns
+                    for pattern in cpp_patterns:
+                        match = re.match(pattern, line)
+                        if match:
+                            func_name = match.group(1)
+                            ref_key = f"{current_req}:{str(file_path)}:{func_name}"
+                            
+                            if ref_key not in added_refs:  # Only add if not already added
+                                ref = CodeReference(
+                                    file=str(file_path.relative_to(self.workspace_dir)),
+                                    line=i,
+                                    function=func_name,
+                                    type="implementation"
+                                )
+                                self.add_mapping(current_req, ref)
+                                added_refs.add(ref_key)
+                                logger.debug(f"Added mapping: {current_req} -> {ref.file}:{ref.line} ({func_name})")
+                            found_func = True
+                            break
+                    
+                    # Check Python pattern if no C++ match
+                    if not found_func:
+                        match = re.match(py_pattern, line)
+                        if match:
+                            func_name = match.group(1)
+                            ref_key = f"{current_req}:{str(file_path)}:{func_name}"
+                            
+                            if ref_key not in added_refs:  # Only add if not already added
+                                ref = CodeReference(
+                                    file=str(file_path.relative_to(self.workspace_dir)),
+                                    line=i,
+                                    function=func_name,
+                                    type="implementation"
+                                )
+                                self.add_mapping(current_req, ref)
+                                added_refs.add(ref_key)
+                                logger.debug(f"Added mapping: {current_req} -> {ref.file}:{ref.line} ({func_name})")
                 
                 # Reset requirement if we hit a blank line or end of function
                 if not line or line.startswith("}"):
@@ -223,28 +247,53 @@ class RequirementsMapper:
         logger.info(f"Generated VSCode URL (backend): {url}")
         return url
 
-    def _find_function_line(self, lines: List[str], function_name: str) -> Optional[int]:
-        """Find the line number where a function is defined."""
-        for i, line in enumerate(lines, start=1):
+    def _find_function_line(self, file_lines: List[str], function_name: str, start_line: int = 1) -> Optional[int]:
+        """Find the exact line number where a function is defined."""
+        # C++ function patterns
+        cpp_patterns = [
+            (r'^(?:virtual\s+)?(?:static\s+)?(?:inline\s+)?(?:const\s+)?'
+             r'(?:void|int|bool|char|float|double|auto|string|std::string|\w+::\w+|\w+)'
+             r'\s+' + re.escape(function_name) + r'\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*\{?$'),
+            r'^(?:class|struct)\s+' + re.escape(function_name) + r'(?:\s*:\s*\w+)?\s*\{?$',
+            r'\w+::' + re.escape(function_name) + r'\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*\{?$'
+        ]
+        
+        # Python function pattern
+        py_pattern = r'^def\s+' + re.escape(function_name) + r'\s*\([^)]*\)\s*(?:->\s*[\w\[\],\s]+)?\s*:'
+        
+        # First try looking near the suggested start line
+        search_start = max(0, start_line - 10)  # Look 10 lines before
+        search_end = min(len(file_lines), start_line + 10)  # and 10 lines after
+        
+        # First pass - look around the suggested line
+        for i in range(search_start, search_end):
+            line = file_lines[i].strip()
+            
+            # Check C++ patterns
+            for pattern in cpp_patterns:
+                if re.match(pattern, line):
+                    return i + 1
+            
+            # Check Python pattern
+            if re.match(py_pattern, line):
+                return i + 1
+        
+        # Second pass - search the entire file if not found near suggested line
+        for i, line in enumerate(file_lines):
             line = line.strip()
-            # Check for various function definition patterns
-            if any(
-                pattern in line.lower()
-                for pattern in [
-                    f"def {function_name.lower()}",
-                    f"void {function_name}",
-                    f"int {function_name}",
-                    f"bool {function_name}",
-                    f"string {function_name}",
-                    f"class {function_name}",
-                    f"struct {function_name}",
-                    f"function {function_name}"
-                ]
-            ) or f"::{function_name}" in line:
-                return i
+            
+            # Check C++ patterns
+            for pattern in cpp_patterns:
+                if re.match(pattern, line):
+                    return i + 1
+            
+            # Check Python pattern
+            if re.match(py_pattern, line):
+                return i + 1
+        
         return None
 
-    def add_requirement_reference(self, requirement_id: str, file_path: str, line_number: int = 1) -> None:
+    def add_requirement_reference(self, requirement_id: str, file_path: str, line_number: int = 1, target_function: str = None) -> None:
         """Add a requirement reference to a source file."""
         try:
             # Get code analyzer instance to access analysis results
@@ -266,59 +315,113 @@ class RequirementsMapper:
 
             # Determine the file type and appropriate comment style
             ext = full_path.suffix.lower()
-            if ext in ['.cpp', '.hpp', '.h']:
+            if ext in ['.cpp', '.hpp', '.h', '.ts', '.tsx', '.js', '.jsx']:
                 comment_start = '// '
             elif ext in ['.py']:
                 comment_start = '# '
-            elif ext in ['.ts', '.tsx', '.js', '.jsx']:
-                comment_start = '// '
             else:
                 comment_start = '// '
+
+            # First try to find the target function in analysis results
+            found_function = None
+            function_start = line_number
+            
+            logger.info(f"Looking for function in {file_path} (target: {target_function}, line: {line_number})")
+            
+            # First try to find from analysis results
+            for func in functions:
+                func_line = getattr(func, 'line_number', None)
+                func_end_line = getattr(func, 'end_line', float('inf'))
+                func_name = getattr(func, 'name', None)
+                
+                logger.debug(f"Checking function from analysis: name={func_name}, line={func_line}, end_line={func_end_line}")
+                
+                # If we have a target function name, only match that specific function
+                if target_function and func_name:
+                    # Try both with and without class name
+                    class_method = func_name.split('::')[-1] if '::' in func_name else func_name
+                    if class_method == target_function or func_name == target_function:
+                        found_function = func
+                        function_start = func_line
+                        logger.info(f"Found target function {target_function} at line {func_line}")
+                        break
+                # Otherwise fall back to line number based matching
+                elif not target_function and func_line is not None:
+                    # Check if this function is closest to our target line
+                    if abs(func_line - line_number) < abs(function_start - line_number):
+                        found_function = func
+                        function_start = func_line
+                        logger.info(f"Found closest function {func_name} at line {func_line}")
+
+            # If not found in analysis, scan manually
+            if not found_function:
+                logger.info(f"Scanning manually for function {target_function if target_function else 'at line ' + str(line_number)}")
+                # Enhanced C++ patterns
+                cpp_patterns = [
+                    # Class method definition (with or without class name)
+                    r'^(?:\w+::)?(\w+)\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*(?:->.*?)?\s*\{?$',
+                    # Standard function definition with any return type
+                    r'^(?:virtual\s+)?(?:static\s+)?(?:inline\s+)?(?:const\s+)?'
+                    r'(?:[\w:]+(?:<[^>]+>)?(?:\s*[&*]+)?)'  # Return type with templates and pointers
+                    r'\s+(\w+)\s*\([^)]*\)\s*(?:const|override|final|noexcept)?\s*(?:=\s*0)?\s*(?:->.*?)?\s*\{?$',
+                    # Constructor definition with initializer list
+                    r'^(\w+)::\1\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*\{?$',
+                ]
+                
+                closest_function = None
+                closest_distance = float('inf')
+                
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    
+                    # Check C++ patterns
+                    for pattern in cpp_patterns:
+                        match = re.match(pattern, line)
+                        if match:
+                            func_name = match.group(1)
+                            current_line = i + 1
+                            
+                            # If we have a target function, only match that function
+                            if target_function:
+                                if func_name == target_function:
+                                    found_function = {'name': func_name}
+                                    function_start = current_line
+                                    logger.info(f"Found target function {target_function} manually at line {function_start}")
+                                    break
+                            # Otherwise find the closest function to our target line
+                            else:
+                                distance = abs(current_line - line_number)
+                                if distance < closest_distance:
+                                    closest_distance = distance
+                                    closest_function = {'name': func_name}
+                                    function_start = current_line
+                    
+                    if found_function:
+                        break
+                
+                if not found_function and closest_function:
+                    found_function = closest_function
+                    logger.info(f"Using closest function {found_function.get('name')} at line {function_start}")
 
             # Create the requirement reference comment
             reference = f"{comment_start}Requirement: {requirement_id}\n"
 
             # Check if the requirement reference already exists
             if any(requirement_id in line for line in lines):
-                logger.debug(f"Requirement {requirement_id} already referenced in {file_path}")
-                return
-
-            # Find the target function from analysis results
-            target_function = None
-            for func in functions:
-                if func.get('line_number') <= line_number and (
-                    func.get('end_line', float('inf')) >= line_number
-                ):
-                    target_function = func
-                    break
-
-            function_start = line_number
-            function_name = ""
-
-            if target_function:
-                # Use function name to find current location in file
-                function_name = target_function.get('name', '')
-                if function_name:
-                    found_line = self._find_function_line(lines, function_name)
-                    if found_line:
-                        function_start = found_line
-                        logger.debug(f"Found function {function_name} at line {function_start}")
-            else:
-                # Fallback to searching for function definition around the line number
-                search_start = max(0, line_number - 5)  # Look a few lines before
-                search_end = min(len(lines), line_number + 5)  # and after
-                for i in range(search_start, search_end):
-                    line = lines[i].strip().lower()
-                    if any(keyword in line for keyword in ['def ', 'void ', 'int ', 'bool ', 'class ', 'struct ', 'function']):
-                        function_start = i + 1
-                        # Try to extract function name
-                        if 'def ' in line:
-                            function_name = line.split('def ')[1].split('(')[0].strip()
-                        elif '::' in line:
-                            function_name = line.split('::')[1].split('(')[0].strip()
-                        else:
-                            function_name = line.split(' ')[1].split('(')[0].strip()
-                        break
+                # If it exists at the wrong location, move it
+                old_locations = [i for i, line in enumerate(lines) if requirement_id in line]
+                if old_locations and function_start > 0:
+                    logger.info(f"Found existing requirement reference at lines {[l+1 for l in old_locations]}, moving to line {function_start}")
+                    # Remove old requirement
+                    for old_loc in reversed(old_locations):  # Remove from end to avoid index issues
+                        lines.pop(old_loc)
+                        # Adjust function_start if we removed lines before it
+                        if old_loc < function_start:
+                            function_start -= 1
+                            logger.debug(f"Adjusted function_start to {function_start} after removing line {old_loc+1}")
+                else:
+                    logger.debug(f"Requirement {requirement_id} already referenced in {file_path}")
+                    return
 
             # Insert the reference just before the function definition
             if function_start > 0:
@@ -329,28 +432,33 @@ class RequirementsMapper:
                     for c in ['#', '//', '/*']
                 ):
                     insert_line -= 1
+                    logger.debug(f"Moving insert point up to line {insert_line} due to existing comment")
+                logger.info(f"Inserting requirement reference at line {insert_line}")
                 lines.insert(insert_line - 1, reference)
             else:
-                # If no function found, insert at the specified line
-                lines.insert(line_number - 1, reference)
+                logger.warning(f"No suitable function found, keeping requirement at original location")
+                return
 
             # Write back to file
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.writelines(lines)
 
             # Add to mappings
-            code_ref = CodeReference(
-                file=str(file_path),
-                line=function_start if function_start > 0 else line_number,
-                function=function_name,
-                type="implementation"
-            )
-            self.add_mapping(requirement_id, code_ref)
-
-            logger.info(f"Added requirement reference to {file_path} at line {function_start} (function: {function_name})")
-
-            # Rescan the file to update function information
-            self._scan_file(full_path)
+            if found_function:
+                # Handle both FunctionInfo objects and dictionaries
+                if isinstance(found_function, dict):
+                    func_name = found_function.get('name', '')
+                else:
+                    func_name = getattr(found_function, 'name', '')
+                    
+                code_ref = CodeReference(
+                    file=str(file_path),
+                    line=function_start,
+                    function=func_name,
+                    type="implementation"
+                )
+                self.add_mapping(requirement_id, code_ref)
+                logger.info(f"Added requirement reference to {file_path} at line {function_start} (function: {func_name})")
 
         except Exception as e:
             logger.error(f"Error adding requirement reference to {file_path}: {e}")

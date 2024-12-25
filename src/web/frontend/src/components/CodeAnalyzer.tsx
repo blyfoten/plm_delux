@@ -51,10 +51,11 @@ interface FileAnalysis {
 
 interface AnalysisProgress {
   total_files: number;
-  analyzed_files: number;
+  completed_files: number;
   current_file: string | null;
   status: 'idle' | 'running' | 'completed' | 'error';
   error_message: string | null;
+  progress: number;
 }
 
 interface CodeAnalyzerProps {
@@ -112,10 +113,11 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [progress, setProgress] = useState<AnalysisProgress>({
     total_files: 0,
-    analyzed_files: 0,
+    completed_files: 0,
     current_file: null,
     status: 'idle',
     error_message: null,
+    progress: 0,
   });
   const [results, setResults] = useState<Record<string, FileAnalysis>>({});
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
@@ -150,10 +152,11 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
           setResults(data);
           setProgress({
             total_files: Object.keys(data).length,
-            analyzed_files: Object.keys(data).length,
+            completed_files: Object.keys(data).length,
             current_file: null,
             status: 'completed',
             error_message: null,
+            progress: 100,
           });
         } else {
           const errorMsg = await getErrorMessage(response);
@@ -696,12 +699,12 @@ const CodeAnalyzer: React.FC<CodeAnalyzerProps> = ({ onAnalysisComplete }) => {
         <Box borderWidth={1} borderRadius="lg" p={4}>
           <Text mb={2}>Analysis Progress</Text>
           <Progress
-            value={(progress.analyzed_files / Math.max(progress.total_files, 1)) * 100}
+            value={progress.progress || 0}
             size="sm"
             colorScheme={progress.status === 'completed' ? 'green' : 'blue'}
           />
           <Text mt={2} fontSize="sm">
-            {progress.analyzed_files} / {progress.total_files} files analyzed
+            {progress.completed_files} / {progress.total_files} files analyzed
             {progress.current_file && ` (Current: ${progress.current_file})`}
           </Text>
         </Box>

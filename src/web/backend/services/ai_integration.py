@@ -9,6 +9,7 @@ import traceback
 import json
 from openai import OpenAI
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
@@ -24,6 +25,8 @@ class GeneratedRequirement:
     description: str
     linked_blocks: List[str]
     additional_notes: List[str]
+    implementation_function: Optional[str] = None
+    implementation_file: Optional[str] = None
 
 class IAIService(ABC):
     """Interface for AI service implementations."""
@@ -231,10 +234,23 @@ Consider adding more documentation"""
             logger.info(f"Generating requirements for domain: {domain}")
             logger.debug(f"Context preview: {context[:200]}...")
             
-            prompt = f"""Based on the following code analysis context, generate requirements for the {domain} domain.
-Format each requirement exactly as follows (no markdown headers):
+            prompt = f"""Based on the following code analysis context, analyze the available functions and generate requirements for the {domain} domain.
 
-RQ-{domain.upper()}-XXX (where XXX is a sequential number)
+First, analyze each function in the code:
+1. Identify its purpose and functionality
+2. Document its inputs, outputs, and behavior
+3. Note any performance characteristics or constraints
+4. Identify error handling and edge cases
+
+Then, generate requirements that map to these functions. For each requirement:
+1. Ensure it matches the actual functionality of the implementing function
+2. Verify the function can satisfy all aspects of the requirement
+3. Consider if the function needs modifications to fully implement the requirement
+4. Document any gaps between requirement and implementation
+
+Format each requirement exactly as follows (DO NOT use any markdown formatting, asterisks, or other decorations):
+
+RQ-{domain.upper()}-XXX (plain text, where XXX is a sequential number)
 Description: (clear, concise requirement statement)
 Additional Notes:
 - (implementation consideration 1)
@@ -242,10 +258,19 @@ Additional Notes:
 Linked Blocks:
 - (architectural component 1)
 - (architectural component 2)
+Implementation:
+- Function: (name of the function that implements this requirement)
+- File: (source file containing the function)
+- Verification: (explain how the function satisfies this requirement)
+- Gaps: (note any gaps between requirement and current implementation)
 
-Generate 5-8 well-defined requirements that cover the key functionality and characteristics shown in the context.
-Focus on both functional and non-functional requirements.
-Make sure each requirement is specific, measurable, and testable.
+Generate 5-8 well-defined requirements that are:
+1. Specific, measurable, and testable
+2. Directly mappable to existing functions
+3. Realistic given the current implementation
+4. Cover both functional and non-functional aspects
+
+Use plain text only, no markdown or formatting characters.
 
 Context:
 {context}"""
@@ -271,17 +296,25 @@ Context:
                         logger.debug(f"Adding requirement: {current_req.id}")
                         requirements.append(current_req)
                     
-                    # Extract the requirement ID (everything up to the first space)
-                    req_id = line.split()[0] if ' ' in line else line
-                    logger.debug(f"Found requirement ID: {req_id}")
-                    
-                    current_req = GeneratedRequirement(
-                        id=req_id,
-                        domain=domain,
-                        description="",
-                        linked_blocks=[],
-                        additional_notes=[]
-                    )
+                    # Extract the requirement ID and clean it
+                    # Remove markdown formatting (**, __, etc.)
+                    clean_line = re.sub(r'[*_`]', '', line)
+                    # Extract just the RQ-XXX-### part
+                    match = re.search(r'(RQ-[A-Z_]+-\d+)', clean_line)
+                    if match:
+                        req_id = match.group(1)
+                        logger.debug(f"Found requirement ID: {req_id}")
+                        
+                        current_req = GeneratedRequirement(
+                            id=req_id,
+                            domain=domain,
+                            description="",
+                            linked_blocks=[],
+                            additional_notes=[]
+                        )
+                    else:
+                        logger.warning(f"Could not extract valid requirement ID from line: {line}")
+                        continue
                 elif current_req:
                     if line.startswith('Description:'):
                         current_req.description = line.replace('Description:', '').strip()
@@ -300,6 +333,14 @@ Context:
                         elif 'Linked Blocks:' in prev_line or current_req.linked_blocks:
                             current_req.linked_blocks.append(item)
                             logger.debug(f"Added linked block: {item}")
+                    elif line.startswith('Implementation:'):
+                        continue
+                    elif line.startswith('Function:'):
+                        current_req.implementation_function = line.replace('Function:', '').strip()
+                        logger.debug(f"Added implementation function: {current_req.implementation_function}")
+                    elif line.startswith('File:'):
+                        current_req.implementation_file = line.replace('File:', '').strip()
+                        logger.debug(f"Added implementation file: {current_req.implementation_file}")
 
             # Add the last requirement if there is one
             if current_req:
